@@ -94,6 +94,54 @@ function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
 }
 
 // =========================================================
+// CALCULATE EXACT KM ALONG CUSTOM DRAWN ROUTE (IF EXISTS)
+// =========================================================
+function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
+    const routes = window.activeCustomRoutes || [];
+    const snapToleranceMeters = 350;
+
+    for (const r of routes) {
+        const coords = r.coordinates;
+        if (!Array.isArray(coords) || coords.length < 2) continue;
+
+        let startIdx = -1;
+        let endIdx = -1;
+        let bestStartDist = snapToleranceMeters;
+        let bestEndDist = snapToleranceMeters;
+
+        for (let i = 0; i < coords.length; i++) {
+            const pt = coords[i];
+            if (!Array.isArray(pt) || pt.length < 2) continue;
+
+            const d1 = getDistanceInMeters(lat1, lng1, pt[0], pt[1]);
+            if (d1 <= bestStartDist) {
+                bestStartDist = d1;
+                startIdx = i;
+            }
+            const d2 = getDistanceInMeters(lat2, lng2, pt[0], pt[1]);
+            if (d2 <= bestEndDist) {
+                bestEndDist = d2;
+                endIdx = i;
+            }
+        }
+
+        if (startIdx !== -1 && endIdx !== -1 && startIdx !== endIdx) {
+            const from = Math.min(startIdx, endIdx);
+            const to = Math.max(startIdx, endIdx);
+            let totalMeters = 0;
+            for (let j = from; j < to; j++) {
+                totalMeters += getDistanceInMeters(
+                    coords[j][0], coords[j][1],
+                    coords[j + 1][0], coords[j + 1][1]
+                );
+            }
+            return parseFloat((totalMeters / 1000).toFixed(1));
+        }
+    }
+    return null;
+}
+
+// =========================================================
 // READ MORE MODAL: FORMATTED PARAGRAPHS, HEADINGS & BULLETS
 // =========================================================
 function formatPadavDescriptionHtml(rawText) {
@@ -516,6 +564,10 @@ function renderIsolatedPadavs(list) {
                             }
                         }
 
+                        // CUSTOM DRAWN LINE SE EXACT KM CALCULATE KAREIN
+                        const customKm = targetP ? getCustomRouteKmBetween(p.lat, p.lng, targetP.lat, targetP.lng) : null;
+                        const displayKm = (customKm !== null && customKm > 0) ? customKm : np.km;
+
                         const routeTag = finalNextList.length > 1 ? `<span style="font-size:10px; background:#e8f5e9; color:#1b5e20; padding:1px 4px; border-radius:3px; margin-right:3px;">मार्ग ${idx + 1}</span>` : '• ';
 
                         return `
@@ -523,7 +575,7 @@ function renderIsolatedPadavs(list) {
                                 ${routeTag}<span onclick="focusOnPadav('${np.id}')" style="color:#d84315; text-decoration:underline; cursor:pointer; font-weight:bold;">
                                     ${np.name}
                                 </span> 
-                                <span style="color:#1b5e20; font-weight:bold;">(${np.path || ''} • ${np.km} km)</span>
+                                <span style="color:#1b5e20; font-weight:bold;">(${np.path || ''} • ${displayKm} km)</span>
                                 ${targetFacilities}
                             </div>
                         `;
@@ -704,9 +756,8 @@ async function saveManualDrawnRoute() {
     }).bindPopup(`<b>🛣️ ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
 
     cancelManualLineDrawing();
-    // Auto OSRM road line hata kar sirf custom line dikhane ke liye map refresh karein
     applyMapFilters();
-    alert("✅ आपका कस्टम मार्ग सेव हो गया है!");
+    alert("✅ आपका कस्टम मार्ग और उसकी सटीक दूरी सेव हो गई है!");
 }
 
 // =========================================================
@@ -853,7 +904,6 @@ async function saveGpsFollowedRoute() {
     }).bindPopup(`<b>📡 ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
 
     cancelGpsFollowRecording();
-    // Auto OSRM road line hata kar sirf custom GPS line dikhane ke liye map refresh karein
     applyMapFilters();
-    alert("✅ GPS द्वारा रिकॉर्ड किया गया मार्ग सेव हो गया है!");
+    alert("✅ GPS द्वारा रिकॉर्ड किया गया मार्ग और उसकी सटीक दूरी सेव हो गई है!");
 }
