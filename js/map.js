@@ -7,6 +7,7 @@ window.padavLayer = L.layerGroup();
 window.routeLayer = L.layerGroup();
 window.autoPadavLinkLayer = L.layerGroup();
 window.activeYatraPadavs = [];
+window.activeCustomRoutes = [];
 window.padavMarkersMap = {};
 window.osrmGeometryCache = {};
 
@@ -57,10 +58,42 @@ function quickCalcKm(lat1, lng1, lat2, lng2) {
 }
 
 function isUserAdminOrMod() {
-    return window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+    if (!window.currentProfile || !window.currentProfile.role) return false;
+    const r = window.currentProfile.role.toLowerCase().trim().replace(/\s+/g, '_');
+    return (r === 'super_admin' || r === 'admin' || r === 'moderator');
 }
 
-/// =========================================================
+// =========================================================
+// CHECK IF CUSTOM DRAWN ROUTE ALREADY EXISTS BETWEEN TWO PADAVS
+// =========================================================
+function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
+    const routes = window.activeCustomRoutes || [];
+    const snapToleranceMeters = 350; // 350m ke dayre me agar custom line start/end ya guzarti hai
+
+    for (const r of routes) {
+        const coords = r.coordinates;
+        if (!Array.isArray(coords) || coords.length < 2) continue;
+
+        let nearStart = false;
+        let nearEnd = false;
+
+        for (let i = 0; i < coords.length; i++) {
+            const pt = coords[i];
+            if (!Array.isArray(pt) || pt.length < 2) continue;
+
+            if (!nearStart && getDistanceInMeters(lat1, lng1, pt[0], pt[1]) <= snapToleranceMeters) {
+                nearStart = true;
+            }
+            if (!nearEnd && getDistanceInMeters(lat2, lng2, pt[0], pt[1]) <= snapToleranceMeters) {
+                nearEnd = true;
+            }
+            if (nearStart && nearEnd) return true;
+        }
+    }
+    return false;
+}
+
+// =========================================================
 // READ MORE MODAL: FORMATTED PARAGRAPHS, HEADINGS & BULLETS
 // =========================================================
 function formatPadavDescriptionHtml(rawText) {
@@ -255,25 +288,26 @@ async function initAndLoadIsolatedMap() {
 
     setTimeout(() => { if (window.map) window.map.invalidateSize(); }, 200);
 
-    window.activeYatraPadavs = window.yatraPadavsForSelection || [];
-    renderIsolatedPadavs(window.activeYatraPadavs);
-
+    // 1. PEHLE CUSTOM DRAWN ROUTES LOAD KAREIN TAAKI AUTO-OSRM UNHE OVERLAP NA KARE
     const { data: routes } = await supabaseClient
         .from('yatra_routes')
         .select('*')
         .eq('yatra_id', window.activeYatra.id);
 
-    if (routes) {
-        routes.forEach(r => {
-            if (Array.isArray(r.coordinates) && r.coordinates.length > 1) {
-                L.polyline(r.coordinates, {
-                    color: r.color || window.activeYatra.theme_color || '#d84315',
-                    weight: 5,
-                    opacity: 0.88
-                }).bindPopup(`<b>🛣️ ${r.route_name}</b><br><small>${r.sub_route || ''}</small>`).addTo(window.routeLayer);
-            }
-        });
-    }
+    window.activeCustomRoutes = routes || [];
+    window.activeCustomRoutes.forEach(r => {
+        if (Array.isArray(r.coordinates) && r.coordinates.length > 1) {
+            L.polyline(r.coordinates, {
+                color: r.color || window.activeYatra.theme_color || '#d84315',
+                weight: 5,
+                opacity: 0.92
+            }).bindPopup(`<b>🛣️ ${r.route_name}</b><br><small>${r.sub_route || ''}</small>`).addTo(window.routeLayer);
+        }
+    });
+
+    // 2. AB PADAVS AUR SIRF BINA-CUSTOM-LINE WALE ROUTES RENDER KAREIN
+    window.activeYatraPadavs = window.yatraPadavsForSelection || [];
+    renderIsolatedPadavs(window.activeYatraPadavs);
 }
 
 async function drawAutoPadavConnectingLines(visibleList) {
@@ -296,6 +330,11 @@ async function drawAutoPadavConnectingLines(visibleList) {
             const np = nextPadavsArr[i];
             const targetP = window.activeYatraPadavs.find(item => item.id === np.id);
             if (!targetP || !targetP.lat || !targetP.lng) continue;
+
+            // AGAR IN DO BINDUS KE BEECH PEHLE SE CUSTOM LINE DRAW KI GAYI HAI TO ROAD WALA AUTO-ROUTE SKIP KAREIN
+            if (hasCustomDrawnRouteBetween(p.lat, p.lng, targetP.lat, targetP.lng)) {
+                continue;
+            }
 
             const isAlternateRoute = (i > 0);
             const routeColor = isAlternateRoute ? altRouteColors[(i - 1) % altRouteColors.length] : primaryColor;
@@ -645,24 +684,29 @@ async function saveManualDrawnRoute() {
         ? document.getElementById('subRouteFilter').value
         : (window.activeYatra.sub_routes?.[0] || 'Main Route');
 
-    const { error } = await supabaseClient.from('yatra_routes').insert([{
+    const newRouteObj = {
         yatra_id: window.activeYatra.id,
         sub_route: subRoute,
         route_name: routeName,
-        coordinates: window.manualDrawnPoints,
+        coordinates: [...window.manualDrawnPoints],
         color: window.activeYatra.theme_color || '#d84315'
-    }]);
+    };
 
+    const { data, error } = await supabaseClient.from('yatra_routes').insert([newRouteObj]).select().single();
     if (error) return alert("Route save error: " + error.message);
 
-    L.polyline(window.manualDrawnPoints, {
-        color: window.activeYatra.theme_color || '#d84315',
+    window.activeCustomRoutes.push(data || newRouteObj);
+
+    L.polyline(newRouteObj.coordinates, {
+        color: newRouteObj.color,
         weight: 5,
-        opacity: 0.88
+        opacity: 0.92
     }).bindPopup(`<b>🛣️ ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
 
     cancelManualLineDrawing();
-    alert("✅ मार्ग मैप पर सेव हो गया है!");
+    // Auto OSRM road line hata kar sirf custom line dikhane ke liye map refresh karein
+    applyMapFilters();
+    alert("✅ आपका कस्टम मार्ग सेव हो गया है!");
 }
 
 // =========================================================
@@ -789,22 +833,27 @@ async function saveGpsFollowedRoute() {
         ? document.getElementById('subRouteFilter').value
         : (window.activeYatra.sub_routes?.[0] || 'Main Route');
 
-    const { error } = await supabaseClient.from('yatra_routes').insert([{
+    const newRouteObj = {
         yatra_id: window.activeYatra.id,
         sub_route: subRoute,
         route_name: routeName,
-        coordinates: window.gpsRecordedPoints,
+        coordinates: [...window.gpsRecordedPoints],
         color: '#0288d1'
-    }]);
+    };
 
+    const { data, error } = await supabaseClient.from('yatra_routes').insert([newRouteObj]).select().single();
     if (error) return alert("Save Error: " + error.message);
 
-    L.polyline(window.gpsRecordedPoints, {
+    window.activeCustomRoutes.push(data || newRouteObj);
+
+    L.polyline(newRouteObj.coordinates, {
         color: '#0288d1',
         weight: 5,
-        opacity: 0.88
+        opacity: 0.92
     }).bindPopup(`<b>📡 ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
 
     cancelGpsFollowRecording();
+    // Auto OSRM road line hata kar sirf custom GPS line dikhane ke liye map refresh karein
+    applyMapFilters();
     alert("✅ GPS द्वारा रिकॉर्ड किया गया मार्ग सेव हो गया है!");
 }
