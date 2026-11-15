@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - SEPARATE LINE DRAWER & ANTI-JUMP GPS FOLLOW
+// PARIKRAMAPATH - SEPARATE LINE DRAWER, READ MORE & ANTI-JUMP GPS
 // =========================================================
 
 window.map = null;
@@ -58,6 +58,21 @@ function quickCalcKm(lat1, lng1, lat2, lng2) {
 
 function isUserAdminOrMod() {
     return window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+}
+
+// =========================================================
+// READ MORE MODAL: SIRF US STHAN KI DETAILS DIKHANE KE LIYE
+// =========================================================
+function openPadavDetailsModal(padavId) {
+    const p = (window.activeYatraPadavs || []).find(item => item.id === padavId);
+    if (!p) return;
+
+    const titleEl = document.getElementById('detailPadavTitle');
+    const bodyEl = document.getElementById('detailPadavBody');
+    if (titleEl) titleEl.innerText = p.name;
+    if (bodyEl) bodyEl.innerText = p.description || 'कोई अतिरिक्त विवरण उपलब्ध नहीं है।';
+
+    showModal('padavDetailModal');
 }
 
 // =========================================================
@@ -148,16 +163,13 @@ async function initAndLoadIsolatedMap() {
             const clickLat = e.latlng.lat;
             const clickLng = e.latlng.lng;
 
-            // 1. SIRF MANUAL LINE DRAW MODE MEIN CLICK SE LINE BANEGI
             if (window.isManualDrawing) {
                 await handleManualMapClickPoint(clickLat, clickLng);
                 return;
             }
 
-            // Agar GPS Follow active hai to map click par kuch na khule
             if (window.isGpsFollowActive) return;
 
-            // 2. Edit Location Picker
             if (window.isPickingEditLocation) {
                 window.isPickingEditLocation = false;
                 document.getElementById('map').style.cursor = '';
@@ -170,8 +182,8 @@ async function initAndLoadIsolatedMap() {
                 return;
             }
 
-            // 3. Admin/Moderator Click to Add Padav/Point
-            if (isUserAdminOrMod()) {
+            // Koi bhi registered user map par click karke naya padav/point add kar sakta hai (approval ke baad dikhega)
+            if (window.currentUser) {
                 const latStr = clickLat.toFixed(6);
                 const lngStr = clickLng.toFixed(6);
                 const quickAddHtml = `
@@ -204,7 +216,6 @@ async function initAndLoadIsolatedMap() {
     window.activeYatraPadavs = window.yatraPadavsForSelection || [];
     renderIsolatedPadavs(window.activeYatraPadavs);
 
-    // Load Saved Custom Routes from Database
     const { data: routes } = await supabaseClient
         .from('yatra_routes')
         .select('*')
@@ -223,9 +234,6 @@ async function initAndLoadIsolatedMap() {
     }
 }
 
-// =========================================================
-// DO RASTE = DO ALAG LINES (PADAV LINKING LINES)
-// =========================================================
 async function drawAutoPadavConnectingLines(visibleList) {
     if (!window.autoPadavLinkLayer) return;
     window.autoPadavLinkLayer.clearLayers();
@@ -303,6 +311,8 @@ function renderIsolatedPadavs(list) {
     window.padavMarkersMap = {};
 
     const adminMode = isUserAdminOrMod();
+    const isLoggedInUser = !!window.currentUser;
+
     const visiblePadavs = adminMode
         ? list
         : list.filter(p => !window.passedPadavIds.has(p.id));
@@ -337,6 +347,21 @@ function renderIsolatedPadavs(list) {
         const startTag = isStart
             ? `<div style="background:#2e7d32; color:white; padding:4px; border-radius:4px; font-size:11px; font-weight:bold; margin-bottom:5px; text-align:center;">🚩 आपका प्रारंभिक पड़ाव</div>`
             : '';
+
+        // 1-LINE DESCRIPTION + "READ MORE" BUTTON
+        let descriptionPreviewHtml = '';
+        if (p.description && p.description.trim().length > 0) {
+            descriptionPreviewHtml = `
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; background:#fff8e1; border-left:3px solid #ff9800; padding:4px 7px; border-radius:4px; margin:5px 0;">
+                    <span style="font-size:12px; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">
+                        ${p.description.trim()}
+                    </span>
+                    <button type="button" onclick="openPadavDetailsModal('${p.id}')" style="background:none; border:none; color:#d84315; font-size:11px; font-weight:bold; text-decoration:underline; cursor:pointer; white-space:nowrap; padding:0;">
+                        Read more
+                    </button>
+                </div>
+            `;
+        }
 
         const amenities = [
             p.has_water ? '🚰 पानी' : '',
@@ -424,24 +449,35 @@ function renderIsolatedPadavs(list) {
                 `</div>`;
         }
 
-        const adminBtnsHtml = adminMode ? `
-            <div style="display:flex; gap:6px; margin-top:8px; border-top:1px dashed #ccc; padding-top:8px;">
-                <button onclick="openEditPadavModal('${p.id}')" style="flex:1; background:#ffc107; color:#000; border:none; padding:6px; border-radius:4px; font-size:12px; font-weight:bold; cursor:pointer;">✏️ Edit</button>
-                <button onclick="deletePadav('${p.id}')" style="flex:1; background:#dc3545; color:#fff; border:none; padding:6px; border-radius:4px; font-size:12px; font-weight:bold; cursor:pointer;">🗑️ Delete</button>
-            </div>
-        ` : '';
+        // REGISTERED USER EDIT BUTTON + ADMIN EDIT/DELETE BUTTONS
+        let actionBtnsHtml = '';
+        if (adminMode) {
+            actionBtnsHtml = `
+                <div style="display:flex; gap:6px; margin-top:8px; border-top:1px dashed #ccc; padding-top:8px;">
+                    <button onclick="openEditPadavModal('${p.id}')" style="flex:1; background:#ffc107; color:#000; border:none; padding:6px; border-radius:4px; font-size:12px; font-weight:bold; cursor:pointer;">✏️ Edit</button>
+                    <button onclick="deletePadav('${p.id}')" style="flex:1; background:#dc3545; color:#fff; border:none; padding:6px; border-radius:4px; font-size:12px; font-weight:bold; cursor:pointer;">🗑️ Delete</button>
+                </div>
+            `;
+        } else if (isLoggedInUser) {
+            actionBtnsHtml = `
+                <div style="margin-top:8px; border-top:1px dashed #ccc; padding-top:8px;">
+                    <button onclick="openEditPadavModal('${p.id}')" style="width:100%; background:#ffc107; color:#000; border:none; padding:6px; border-radius:4px; font-size:12px; font-weight:bold; cursor:pointer;">✏️ जानकारी सुधारें (Edit)</button>
+                </div>
+            `;
+        }
 
         const popupHtml = `
-            <div style="min-width:225px; font-family:sans-serif;">
+            <div style="min-width:225px; max-width:265px; font-family:sans-serif;">
                 ${startTag}
                 <span style="font-size:11px; background:#fff3e0; color:#e65100; padding:2px 6px; border-radius:4px; font-weight:bold;">${p.sub_route || window.activeYatra.name}</span>
-                <h4 style="margin:6px 0; color:#222; font-size:15px;">${p.name}</h4>
+                <h4 style="margin:6px 0 4px 0; color:#222; font-size:15px;">${p.name}</h4>
+                ${descriptionPreviewHtml}
                 ${pathsHtml}
                 ${facilitySectionHtml}
                 ${p.contact_no ? `<p style="margin:4px 0; font-size:12px;"><b>📞 संपर्क:</b> ${p.contact_person || ''} (<a href="tel:${p.contact_no}">${p.contact_no}</a>)</p>` : ''}
                 ${nextOptionsHtml}
                 <a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" style="display:block; text-align:center; background:#1976d2; color:white; padding:6px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold; margin-top:8px;">🧭 Google Maps से दिशा देखें</a>
-                ${adminBtnsHtml}
+                ${actionBtnsHtml}
             </div>
         `;
 
@@ -476,7 +512,6 @@ function applyMapFilters() {
 // 1. SEPARATE FUNCTION: MANUAL POINT-TO-POINT LINE DRAWER
 // =========================================================
 function startManualLineDrawing() {
-    // Agar GPS Follow chal raha ho to pehle use band karein
     if (window.isGpsFollowActive) cancelGpsFollowRecording();
 
     window.isManualDrawing = true;
@@ -488,7 +523,6 @@ function startManualLineDrawing() {
     document.getElementById('manualDrawStatus').innerText = 'मैप पर एक बिंदु से दूसरे बिंदु तक क्लिक करके लाइन खींचें।';
 }
 
-// Backward compatibility agar purana button startRouteDrawing() call kare
 function startRouteDrawing() {
     startManualLineDrawing();
 }
@@ -592,7 +626,6 @@ async function saveManualDrawnRoute() {
 // 2. SEPARATE FUNCTION: GPS FOLLOW RECORDER (ANTI-JUMP)
 // =========================================================
 function startGpsFollowRecording() {
-    // Agar Manual Line Drawing chal rahi ho to pehle use band karein
     if (window.isManualDrawing) cancelManualLineDrawing();
 
     if (!navigator.geolocation) {
@@ -623,7 +656,6 @@ function startGpsFollowRecording() {
         const acc = pos.coords.accuracy || 999;
         const now = Date.now();
 
-        // ANTI-JUMP FILTER 1: Poor accuracy (>35m error) ignore karein
         if (acc > 35) {
             if (statusEl) statusEl.innerHTML = `<span style="color:#e65100;">⚠️ GPS सिग्नल कमज़ोर (±${Math.round(acc)}m), स्थिर होने की प्रतीक्षा...</span>`;
             return;
@@ -644,10 +676,8 @@ function startGpsFollowRecording() {
         const timeDiffSec = Math.max((now - window.lastValidGpsTime) / 1000, 1);
         const speedMps = distMoved / timeDiffSec;
 
-        // ANTI-JUMP FILTER 2: 12 meter se kam hilne par noise ignore karein
         if (distMoved < 12) return;
 
-        // ANTI-JUMP FILTER 3: Achanak >120m jump ya >25 m/s speed aaye to GPS glitch reject karein
         if (distMoved > 120 || speedMps > 25) {
             console.warn(`GPS Jump Blocked: ${Math.round(distMoved)}m`);
             if (statusEl) statusEl.innerHTML = `<span style="color:#d84315;">🛡️ GPS जंप रोका गया (${Math.round(distMoved)}m उछाल फ़िल्टर)</span>`;

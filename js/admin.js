@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - ADMIN, OSRM ROAD DISTANCE & PADAV CRUD
+// PARIKRAMAPATH - ADMIN, YATRA CRUD & PADAV APPROVAL SYSTEM
 // =========================================================
 
 window.tempNextPadavs = [];
@@ -69,14 +69,27 @@ async function fetchActualRoadKm(lat1, lng1, lat2, lng2) {
     return parseFloat((R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.25).toFixed(1));
 }
 
-// 1A. MENU SE MODAL KHOLNA
+// 1A. MENU SE PADAV MODAL KHOLNA (REGISTERED USER CHECK KE SAATH)
 function openAddPadavModal() {
     if (!window.activeYatra) return;
+
+    // Sirf logged-in / registered users hi padav add kar sakte hain
+    if (!window.currentUser) {
+        alert("🔑 नया पड़ाव जोड़ने के लिए कृपया पहले Login या Register करें।");
+        openAuthModal();
+        return;
+    }
+
+    const isAdmin = window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+    const noticeEl = document.getElementById('padavApprovalNotice');
+    if (noticeEl) noticeEl.style.display = isAdmin ? 'none' : 'block';
+
     document.getElementById('editPadavId').value = '';
     const heading = document.getElementById('padavModalHeading');
     if (heading) heading.innerText = '➕ नया पड़ाव / आश्रम जोड़ें';
 
     document.getElementById('newPadavName').value = '';
+    document.getElementById('newPadavDescription').value = '';
     document.getElementById('newPadavContactName').value = '';
     document.getElementById('newPadavContactNo').value = '';
     document.getElementById('newPadavLat').value = '';
@@ -92,7 +105,6 @@ function openAddPadavModal() {
     showModal('addPadavModal');
 }
 
-// Jab "Point" select ho to Bhojan/Niwas/Suvidhayein automatic "Not Available" ho jayein
 function onPadavCategoryChange() {
     const cat = document.getElementById('newPadavCat').value;
     if (cat === 'Point') {
@@ -102,7 +114,6 @@ function onPadavCategoryChange() {
         document.getElementById('chkToilet').checked = false;
         document.getElementById('chkMedical').checked = false;
     } else {
-        // Agar wapas Ashram/Mandir chunein to default values restore karein
         if (document.getElementById('newPadavBhojan').value === 'Not Available') {
             document.getElementById('newPadavBhojan').value = 'Free / Sadavrat';
         }
@@ -114,7 +125,6 @@ function onPadavCategoryChange() {
     }
 }
 
-// 1B. DESKTOP/MOBILE MAP PAR CLICK KARKE EXACT LOCATION SE MODAL KHOLNA
 function openAddPadavAtCoords(lat, lng) {
     if (window.map) window.map.closePopup();
     openAddPadavModal();
@@ -122,10 +132,20 @@ function openAddPadavAtCoords(lat, lng) {
     document.getElementById('newPadavLng').value = lng;
 }
 
-// 2. EXISTING PADAV EDIT KARNE KE LIYE MODAL KHOLNA
+// 2. EXISTING PADAV EDIT KARNA (REGISTERED USERS & ADMINS DONO KE LIYE)
 function openEditPadavModal(padavId) {
+    if (!window.currentUser) {
+        alert("🔑 पड़ाव संपादित (Edit) करने के लिए कृपया पहले Login करें।");
+        openAuthModal();
+        return;
+    }
+
     const p = window.activeYatraPadavs.find(item => item.id === padavId);
     if (!p) return;
+
+    const isAdmin = window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+    const noticeEl = document.getElementById('padavApprovalNotice');
+    if (noticeEl) noticeEl.style.display = isAdmin ? 'none' : 'block';
 
     document.getElementById('editPadavId').value = p.id;
     const heading = document.getElementById('padavModalHeading');
@@ -136,6 +156,7 @@ function openEditPadavModal(padavId) {
     document.getElementById('newPadavName').value = p.name || '';
     document.getElementById('newPadavSubRoute').value = p.sub_route || '';
     document.getElementById('newPadavCat').value = p.category || 'Ashram';
+    document.getElementById('newPadavDescription').value = p.description || '';
     document.getElementById('newPadavBhojan').value = p.bhojan_type || 'Free / Sadavrat';
     document.getElementById('newPadavNiwas').value = p.niwas_type || 'Ashram / Dharamshala';
     document.getElementById('chkWater').checked = !!p.has_water;
@@ -174,11 +195,11 @@ function openEditPadavModal(padavId) {
     showModal('addPadavModal');
 }
 
-// 3. PADAV DELETE KARNA
+// 3. PADAV DELETE KARNA (SIRF ADMIN/MODERATOR)
 async function deletePadav(padavId) {
     const p = window.activeYatraPadavs.find(item => item.id === padavId);
-    if (!p) return;
-    if (!confirm(`⚠️ क्या आप वाकई "${p.name}" को हमेशा के लिए हटाना चाहते हैं?`)) return;
+    const label = p ? p.name : 'इस पड़ाव';
+    if (!confirm(`⚠️ क्या आप वाकई "${label}" को हमेशा के लिए हटाना चाहते हैं?`)) return;
 
     const { error } = await supabaseClient.from('padavs').delete().eq('id', padavId);
     if (error) return alert("Delete Error: " + error.message);
@@ -268,8 +289,14 @@ function renderTempNextPadavsList() {
 }
 
 async function submitNewPadav() {
+    if (!window.currentUser) {
+        alert("🔑 कृपया पहले Login या Register करें।");
+        openAuthModal();
+        return;
+    }
+
     const editId = document.getElementById('editPadavId').value.trim();
-    const isAuto = window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+    const isAdmin = window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
 
     const picker = document.getElementById('nextPadavPicker');
     if (picker && picker.value) {
@@ -284,6 +311,7 @@ async function submitNewPadav() {
         name: document.getElementById('newPadavName').value.trim(),
         sub_route: document.getElementById('newPadavSubRoute').value,
         category: document.getElementById('newPadavCat').value,
+        description: document.getElementById('newPadavDescription').value.trim(),
         path_types: selectedPaths,
         bhojan_type: document.getElementById('newPadavBhojan').value,
         niwas_type: document.getElementById('newPadavNiwas').value,
@@ -296,7 +324,7 @@ async function submitNewPadav() {
         contact_no: document.getElementById('newPadavContactNo').value.trim(),
         lat: parseFloat(document.getElementById('newPadavLat').value),
         lng: parseFloat(document.getElementById('newPadavLng').value),
-        status: isAuto ? 'approved' : 'pending'
+        status: isAdmin ? 'approved' : 'pending'
     };
 
     if (!obj.name || isNaN(obj.lat) || isNaN(obj.lng)) {
@@ -307,30 +335,46 @@ async function submitNewPadav() {
         const { data, error } = await supabaseClient.from('padavs').update(obj).eq('id', editId).select().single();
         if (error) return alert("Update Error: " + error.message);
 
-        if (data) {
+        if (isAdmin && data) {
             syncPadavInMemory(data);
             renderIsolatedPadavs(window.activeYatraPadavs);
+            closeAllModals();
+            alert("✅ पड़ाव की जानकारी अपडेट हो गई है!");
+        } else {
+            // Non-admin ne edit kiya hai to approval ke liye pending ho gaya
+            window.activeYatraPadavs = window.activeYatraPadavs.filter(item => item.id !== editId);
+            renderIsolatedPadavs(window.activeYatraPadavs);
+            closeAllModals();
+            alert("✅ आपके बदलाव सुरक्षित कर लिए गए हैं। एडमिन की स्वीकृति (Approval) के बाद यह मैप पर दिखाई देगा।");
         }
-        closeAllModals();
-        alert("✅ पड़ाव की जानकारी अपडेट हो गई है!");
     } else {
         const { data, error } = await supabaseClient.from('padavs').insert([obj]).select().single();
         if (error) return alert("Insert Error: " + error.message);
 
-        if (isAuto && data) {
+        if (isAdmin && data) {
             syncPadavInMemory(data);
             renderIsolatedPadavs(window.activeYatraPadavs);
         }
         closeAllModals();
-        alert(isAuto ? "✅ नया पड़ाव मैप पर लाइव हो गया है!" : "✅ पड़ाव भेज दिया गया है। एडमिन अप्रूवल के बाद दिखेगा।");
+        alert(isAdmin
+            ? "✅ नया पड़ाव मैप पर लाइव हो गया है!"
+            : "✅ आपका पड़ाव भेज दिया गया है। एडमिन के अप्रूवल के बाद यह मैप पर दिखाई देगा।");
     }
 }
 
+// =========================================================
+// ADMIN MODAL: PENDING PADAVS + YATRA CREATE / EDIT / DELETE
+// =========================================================
 async function openAdminModal() {
     showModal('adminModal');
-    document.getElementById('superAdminYatraCreator').style.display =
-        window.currentProfile.role === 'super_admin' ? 'block' : 'none';
+    const isSuperAdmin = window.currentProfile && window.currentProfile.role === 'super_admin';
+    document.getElementById('superAdminYatraCreator').style.display = isSuperAdmin ? 'block' : 'none';
     document.getElementById('modYatraLabel').innerText = window.activeYatra.name;
+
+    if (isSuperAdmin) {
+        resetYatraCreatorForm();
+        await loadAdminYatrasList();
+    }
 
     const { data: pending } = await supabaseClient
         .from('padavs')
@@ -346,9 +390,13 @@ async function openAdminModal() {
 
     box.innerHTML = pending.map(p => `
         <div style="border:1px solid #ddd; padding:8px; border-radius:6px; margin-bottom:8px; font-size:13px;">
-            <b>${p.name}</b> (${p.category})<br><small>${p.bhojan_type} | ${p.niwas_type}</small><br>
-            <button onclick="approvePadav('${p.id}')" style="background:#2e7d32; color:white; border:none; padding:4px 8px; border-radius:4px; margin-top:5px; cursor:pointer;">✔ Approve</button>
-            <button onclick="deletePadav('${p.id}')" style="background:#dc3545; color:white; border:none; padding:4px 8px; border-radius:4px; margin-top:5px; cursor:pointer;">✖ Reject</button>
+            <b>${p.name}</b> (${p.category})<br>
+            <small>${p.bhojan_type} | ${p.niwas_type}</small>
+            ${p.description ? `<p style="margin:4px 0; font-size:12px; color:#444; background:#f9f9f9; padding:4px; border-radius:4px;">📝 ${p.description}</p>` : ''}
+            <div style="margin-top:5px;">
+                <button onclick="approvePadav('${p.id}')" style="background:#2e7d32; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">✔ Approve</button>
+                <button onclick="rejectPendingPadav('${p.id}')" style="background:#dc3545; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">✖ Reject</button>
+            </div>
         </div>
     `).join('');
 }
@@ -362,9 +410,83 @@ async function approvePadav(id) {
     openAdminModal();
 }
 
-async function createNewYatra() {
+async function rejectPendingPadav(id) {
+    if (!confirm("क्या आप इस पेंडिंग पड़ाव को रिजेक्ट/डिलीट करना चाहते हैं?")) return;
+    await supabaseClient.from('padavs').delete().eq('id', id);
+    openAdminModal();
+}
+
+// YATRA LIST, CREATE, EDIT & DELETE FUNCTIONS
+async function loadAdminYatrasList() {
+    const listBox = document.getElementById('adminYatrasList');
+    if (!listBox) return;
+    listBox.innerHTML = '<small style="color:#555;">यात्राएं लोड हो रही हैं...</small>';
+
+    const { data: yatras } = await supabaseClient.from('yatras').select('*').order('name');
+    window.adminCachedYatras = yatras || [];
+
+    if (window.adminCachedYatras.length === 0) {
+        listBox.innerHTML = '<small style="color:#777;">कोई यात्रा नहीं मिली।</small>';
+        return;
+    }
+
+    listBox.innerHTML = window.adminCachedYatras.map(y => `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:white; padding:6px 8px; border-radius:5px; margin-bottom:5px; border:1px solid #bbdefb; font-size:12px;">
+            <div>
+                <b>${y.name_hi || y.name}</b><br>
+                <small style="color:#666;">${y.state || ''} • ${y.slug}</small>
+            </div>
+            <div style="display:flex; gap:4px;">
+                <button type="button" onclick="editYatraInAdmin('${y.id}')" style="background:#ffc107; color:#000; border:none; padding:4px 7px; border-radius:4px; font-weight:bold; cursor:pointer;">✏️ Edit</button>
+                <button type="button" onclick="deleteYatraInAdmin('${y.id}')" style="background:#dc3545; color:#fff; border:none; padding:4px 7px; border-radius:4px; font-weight:bold; cursor:pointer;">🗑️ Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function stripHtmlTags(str) {
+    return (str || '').replace(/<\/?[^>]+(>|$)/g, '').trim();
+}
+
+function editYatraInAdmin(yatraId) {
+    const y = (window.adminCachedYatras || []).find(item => item.id === yatraId);
+    if (!y) return;
+
+    document.getElementById('editYatraId').value = y.id;
+    document.getElementById('yatraFormHeading').innerText = `✏️ यात्रा संपादित करें: ${y.name_hi || y.name}`;
+    document.getElementById('saveYatraBtn').innerText = '💾 यात्रा अपडेट करें';
+    document.getElementById('cancelYatraEditBtn').style.display = 'inline-block';
+
+    document.getElementById('newYatraSlug').value = y.slug || '';
+    document.getElementById('newYatraName').value = y.name || '';
+    document.getElementById('newYatraNameHi').value = y.name_hi || '';
+    document.getElementById('newYatraState').value = y.state || '';
+    document.getElementById('newYatraType').value = y.yatra_type || 'circular';
+    document.getElementById('newYatraEnd').value = y.default_end_point || '';
+    document.getElementById('newYatraSubRoutes').value = Array.isArray(y.sub_routes) ? y.sub_routes.join(', ') : '';
+    document.getElementById('newYatraLat').value = y.center_lat || '';
+    document.getElementById('newYatraLng').value = y.center_lng || '';
+    document.getElementById('newYatraAbout').value = stripHtmlTags(y.about_html);
+    document.getElementById('newYatraInfo').value = stripHtmlTags(y.information_html);
+    document.getElementById('newYatraNiyam').value = stripHtmlTags(y.niyam_html);
+}
+
+function resetYatraCreatorForm() {
+    document.getElementById('editYatraId').value = '';
+    document.getElementById('yatraFormHeading').innerText = '➕ नई यात्रा व SEO पेज जोड़ें (Super Admin)';
+    document.getElementById('saveYatraBtn').innerText = 'Create Yatra & SEO Page';
+    document.getElementById('cancelYatraEditBtn').style.display = 'none';
+
+    ['newYatraSlug', 'newYatraName', 'newYatraNameHi', 'newYatraState', 'newYatraEnd',
+     'newYatraSubRoutes', 'newYatraLat', 'newYatraLng', 'newYatraAbout', 'newYatraInfo', 'newYatraNiyam']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+}
+
+async function saveYatraForm() {
+    const editId = document.getElementById('editYatraId').value.trim();
     const subs = document.getElementById('newYatraSubRoutes').value.split(',').map(s => s.trim()).filter(Boolean);
-    const { error } = await supabaseClient.from('yatras').insert([{
+
+    const payload = {
         slug: document.getElementById('newYatraSlug').value.trim().toLowerCase(),
         name: document.getElementById('newYatraName').value.trim(),
         name_hi: document.getElementById('newYatraNameHi').value.trim(),
@@ -377,10 +499,34 @@ async function createNewYatra() {
         about_html: `<p>${document.getElementById('newYatraAbout').value}</p>`,
         information_html: `<p>${document.getElementById('newYatraInfo').value}</p>`,
         niyam_html: `<p>${document.getElementById('newYatraNiyam').value}</p>`
-    }]);
+    };
 
-    if (error) return alert("Error: " + error.message);
-    alert("🎉 नई यात्रा और उसका SEO पेज तैयार हो गया है!");
+    if (!payload.slug || !payload.name || isNaN(payload.center_lat) || isNaN(payload.center_lng)) {
+        return alert("Slug, Yatra Name, Center Lat और Center Lng आवश्यक हैं।");
+    }
+
+    if (editId) {
+        const { error } = await supabaseClient.from('yatras').update(payload).eq('id', editId);
+        if (error) return alert("Update Error: " + error.message);
+        alert("✅ यात्रा अपडेट हो गई है!");
+        location.reload();
+    } else {
+        const { error } = await supabaseClient.from('yatras').insert([payload]);
+        if (error) return alert("Error: " + error.message);
+        alert("🎉 नई यात्रा और उसका SEO पेज तैयार हो गया है!");
+        location.reload();
+    }
+}
+
+async function deleteYatraInAdmin(yatraId) {
+    const y = (window.adminCachedYatras || []).find(item => item.id === yatraId);
+    if (!y) return;
+    if (!confirm(`⚠️ चेतावनी: क्या आप वाकई "${y.name_hi || y.name}" यात्रा को डिलीट करना चाहते हैं? इसके सभी पड़ाव और मार्ग भी हट सकते हैं।`)) return;
+
+    const { error } = await supabaseClient.from('yatras').delete().eq('id', yatraId);
+    if (error) return alert("Delete Yatra Error: " + error.message);
+
+    alert("🗑️ यात्रा डिलीट कर दी गई है।");
     location.reload();
 }
 
