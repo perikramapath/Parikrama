@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - ADMIN, YATRA CRUD, FORMATTER & PADAV APPROVAL
+// PARIKRAMAPATH - ADMIN, YATRA CRUD, FORMATTER, AARTI & PADAV
 // =========================================================
 
 window.tempNextPadavs = [];
@@ -379,7 +379,7 @@ async function submitNewPadav() {
 }
 
 // =========================================================
-// 2. ADMIN MODAL: PENDING PADAVS + YATRA CREATE / EDIT / DELETE
+// 2. ADMIN MODAL: PENDING PADAVS + YATRA CRUD + AARTI MANAGER
 // =========================================================
 async function openAdminModal() {
     showModal('adminModal');
@@ -393,6 +393,11 @@ async function openAdminModal() {
     if (isSuperAdmin) {
         resetYatraCreatorForm();
         await loadAdminYatrasList();
+    }
+
+    // Active Yatra ki Aartis load karein (Admin/Moderator ke liye)
+    if (isAdminUser() && typeof loadAdminAartis === 'function') {
+        await loadAdminAartis();
     }
 
     const { data: pending } = await supabaseClient
@@ -442,7 +447,6 @@ function formatTextToCleanHtml(rawText) {
     const text = (rawText || '').trim();
     if (!text) return '';
 
-    // Agar pehle se HTML tags likhe hain to direct save karein
     if (/<(p|ul|ol|li|h[1-6]|br|div)\b[^>]*>/i.test(text)) {
         return text;
     }
@@ -454,7 +458,6 @@ function formatTextToCleanHtml(rawText) {
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
 
-        // Khaali line = Paragraph gap
         if (!line) {
             if (inBulletList) {
                 htmlOutput += '</ul>';
@@ -463,7 +466,6 @@ function formatTextToCleanHtml(rawText) {
             continue;
         }
 
-        // Bullet point check (-, *, •, ya 1.)
         const bulletMatch = line.match(/^([-*•]|\d+\.)\s+(.*)$/);
         if (bulletMatch) {
             if (!inBulletList) {
@@ -476,7 +478,6 @@ function formatTextToCleanHtml(rawText) {
                 htmlOutput += '</ul>';
                 inBulletList = false;
             }
-            // Agar line ke ant mein ':' hai to Bold Sub-heading banayein
             if (line.endsWith(':') && line.length < 85) {
                 htmlOutput += `<h4 style="margin:14px 0 6px 0; color:#d84315; font-size:15px;">${line}</h4>`;
             } else {
@@ -617,15 +618,132 @@ async function deleteYatraInAdmin(yatraId) {
     location.reload();
 }
 
-async function openAartiModal() {
-    document.getElementById('aartiYatraTitle').innerText = window.activeYatra.name;
-    const { data } = await supabaseClient.from('yatra_aartis').select('*').eq('yatra_id', window.activeYatra.id);
-    document.getElementById('aartiContainer').innerHTML = (data && data.length)
-        ? data.map(a => `<div style="margin-bottom:15px;"><h4>${a.title}</h4><pre style="white-space:pre-wrap; font-family:inherit;">${a.content}</pre></div>`).join('')
-        : '<p style="color:#777;">इस यात्रा की आरती जल्द जोड़ी जाएगी।</p>';
-    showModal('aartiModal');
+// =========================================================
+// 4. OFFLINE AARTI CACHE + ADMIN AARTI ADD / DELETE
+// =========================================================
+async function syncOfflineAartis() {
+    try {
+        const { data, error } = await supabaseClient
+            .from('yatra_aartis')
+            .select('*')
+            .order('created_at', { ascending: true });
+        if (data && !error) {
+            localStorage.setItem('pp_offline_aartis', JSON.stringify(data));
+        }
+    } catch (e) {
+        console.warn("Offline Aarti sync skipped:", e);
+    }
 }
 
+async function openAartiModal() {
+    if (!window.activeYatra) return;
+    document.getElementById('aartiYatraTitle').innerText = window.activeYatra.name_hi || window.activeYatra.name;
+    showModal('aartiModal');
+
+    await syncOfflineAartis();
+    renderYatraAartiList();
+}
+
+function renderYatraAartiList() {
+    const container = document.getElementById('aartiContainer');
+    const allCached = JSON.parse(localStorage.getItem('pp_offline_aartis') || '[]');
+    const yatraAartis = allCached.filter(a => a.yatra_id === window.activeYatra.id);
+
+    if (yatraAartis.length === 0) {
+        container.innerHTML = '<p style="color:#777; text-align:center;">इस यात्रा की आरती जल्द जोड़ी जाएगी।</p>';
+        return;
+    }
+
+    container.innerHTML = yatraAartis.map(a => `
+        <button type="button" onclick="viewAartiLyrics('${a.id}')" style="width:100%; padding:11px; margin-bottom:8px; background:#fff8e1; border:2px solid #ff9800; border-radius:8px; font-size:15px; font-weight:bold; color:#d84315; cursor:pointer; text-align:left;">
+            🪔 ${a.title}
+        </button>
+    `).join('');
+}
+
+function viewAartiLyrics(aartiId) {
+    const container = document.getElementById('aartiContainer');
+    const allCached = JSON.parse(localStorage.getItem('pp_offline_aartis') || '[]');
+    const aarti = allCached.find(a => String(a.id) === String(aartiId));
+    if (!aarti) return;
+
+    const formattedLyrics = (aarti.content || '').replace(/\r?\n/g, '<br>');
+    container.innerHTML = `
+        <button type="button" onclick="renderYatraAartiList()" style="background:none; border:none; color:#0288d1; font-weight:bold; cursor:pointer; margin-bottom:10px; font-size:14px; padding:0;">⬅ सभी आरतियाँ (Back)</button>
+        <h4 style="color:#e91e63; text-align:center; margin:0 0 10px 0; font-size:17px;">🪔 ${aarti.title}</h4>
+        <div style="font-size:15px; line-height:1.8; color:#222; text-align:center; background:#fffdf7; padding:12px; border-radius:8px; border:1px solid #ffe082;">
+            ${formattedLyrics}
+        </div>
+    `;
+}
+
+async function addYatraAarti() {
+    if (!isAdminUser() || !window.activeYatra) return;
+    const titleEl = document.getElementById('adminAartiTitle');
+    const contentEl = document.getElementById('adminAartiContent');
+    if (!titleEl || !contentEl) return;
+
+    const title = titleEl.value.trim();
+    const content = contentEl.value.trim();
+
+    if (!title || !content) return alert("कृपया आरती का शीर्षक और बोल दोनों भरें।");
+
+    const { error } = await supabaseClient.from('yatra_aartis').insert([{
+        yatra_id: window.activeYatra.id,
+        title: title,
+        content: content
+    }]);
+
+    if (error) return alert("Aarti Save Error: " + error.message);
+
+    alert("✅ आरती सुरक्षित हो गई है!");
+    titleEl.value = '';
+    contentEl.value = '';
+    await syncOfflineAartis();
+    await loadAdminAartis();
+}
+
+async function loadAdminAartis() {
+    const label = document.getElementById('adminAartiYatraLabel');
+    if (label && window.activeYatra) label.innerText = window.activeYatra.name_hi || window.activeYatra.name;
+
+    const box = document.getElementById('adminAartiList');
+    if (!box || !window.activeYatra) return;
+
+    const { data } = await supabaseClient
+        .from('yatra_aartis')
+        .select('*')
+        .eq('yatra_id', window.activeYatra.id)
+        .order('created_at');
+
+    if (!data || data.length === 0) {
+        box.innerHTML = '<small style="color:#777;">इस यात्रा में अभी कोई आरती नहीं जुड़ी है।</small>';
+        return;
+    }
+
+    box.innerHTML = data.map(a => `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:white; padding:6px 8px; border-radius:5px; margin-bottom:4px; border:1px solid #f48fb1; font-size:12px;">
+            <b>🪔 ${a.title}</b>
+            <button type="button" onclick="deleteYatraAarti('${a.id}')" style="background:#dc3545; color:white; border:none; padding:3px 7px; border-radius:4px; cursor:pointer;">🗑️ Delete</button>
+        </div>
+    `).join('');
+}
+
+async function deleteYatraAarti(aartiId) {
+    if (!confirm("क्या आप इस आरती को डिलीट करना चाहते हैं?")) return;
+    const { error } = await supabaseClient.from('yatra_aartis').delete().eq('id', aartiId);
+    if (error) return alert("Delete Error: " + error.message);
+    await syncOfflineAartis();
+    await loadAdminAartis();
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    setTimeout(syncOfflineAartis, 2500);
+});
+
+// =========================================================
+// 5. MODAL & MENU HELPERS
+// =========================================================
 function showModal(id) {
     closeAllModals();
     document.getElementById('modalBackdrop').style.display = 'block';

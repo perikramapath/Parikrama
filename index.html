@@ -17,6 +17,10 @@
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="style.css" />
+    
+    <!-- QR Code & PDF Generator Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
 
@@ -61,8 +65,8 @@
                 <div style="font-weight:bold; color:#e65100; margin-bottom:6px;">📖 प्रमुख यात्रा मार्गदर्शिकाएं (Yatra Guides):</div>
                 <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
                     <a href="/yatra-guide.html?slug=narmada-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• नर्मदा परिक्रमा</a>
-<a href="/yatra-guide.html?slug=girnar-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• गिरनार परिक्रमा</a>
-<a href="/yatra-guide.html?slug=braj-84-kos-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• ब्रज 84 कोस परिक्रमा</a>
+                    <a href="/yatra-guide.html?slug=girnar-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• गिरनार परिक्रमा</a>
+                    <a href="/yatra-guide.html?slug=braj-84-kos-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• ब्रज 84 कोस परिक्रमा</a>
                 </div>
                 <div style="color:#666; border-top:1px dashed #ffd54f; padding-top:6px;">
                     © 2026 Parikramapath.in — भारत तीर्थ एवं परिक्रमा सेवा पोर्टल
@@ -329,26 +333,66 @@
     </div>
 </div>
 
-<!-- PROFILE & DYNAMIC ID CARD MODAL -->
-<div id="profileModal" class="center-modal" style="display:none;">
-    <h3 style="margin-top:0; text-align:center; color:#2e7d32;">🪪 Parikramapath ID Pass</h3>
-    <div id="dynamicIdCard" style="border:3px solid #ff5722; border-radius:12px; padding:15px; background:#fffdf7; margin-bottom:12px;">
-        <small style="color:#ff5722; font-weight:bold;">PARIKRAMAPATH OFFICIAL PASS</small>
-        <h4 id="cardYatraTitle" style="margin:3px 0 5px 0; color:#222; font-size:17px;">Yatra Name</h4>
-        <span id="cardRoleBadge" style="background:#2e7d32; color:white; padding:2px 8px; border-radius:10px; font-size:11px;">PILGRIM</span>
-        <hr style="border:0; border-top:1px dashed #ccc; margin:10px 0;">
-        <p style="margin:4px 0; font-size:13px;"><b>नाम:</b> <span id="cardUserName">-</span></p>
-        <p style="margin:4px 0; font-size:13px;"><b>मोबाइल:</b> <span id="cardUserMobile">-</span></p>
-        <p style="margin:4px 0; font-size:13px;"><b>🚩 आरंभ स्थल:</b> <span id="cardStartPoint">-</span></p>
-        <p style="margin:4px 0; font-size:13px;"><b>🏁 समापन स्थल:</b> <span id="cardEndPoint">-</span></p>
+<!-- PROFILE, LIVE SELFIE, QR & DYNAMIC ID CARD MODAL -->
+<div id="profileModal" class="center-modal" style="display:none; max-width:440px;">
+    <h3 style="margin-top:0; text-align:center; color:#2e7d32;">🪪 Parikramapath Official ID Pass</h3>
+
+    <!-- LIVE SELFIE CAMERA SECTION -->
+    <div style="text-align:center; margin-bottom:10px; background:#f9f9f9; padding:8px; border-radius:8px; border:1px solid #eee;">
+        <img id="profilePicPreview" src="" alt="Selfie" style="display:none; width:75px; height:75px; border-radius:50%; object-fit:cover; margin:0 auto 6px auto; border:2px solid #ff5722;">
+        <div id="cameraContainer" style="display:none; margin-bottom:6px;">
+            <video id="cameraVideo" autoplay playsinline style="width:160px; height:160px; object-fit:cover; border-radius:50%; border:2px solid #2e7d32;"></video><br>
+            <button type="button" onclick="captureSelfie()" style="background:#2e7d32; color:white; border:none; padding:5px 12px; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:5px;">📸 फोटो खींचें (Capture)</button>
+        </div>
+        <canvas id="cameraCanvas" style="display:none;"></canvas>
+        <button type="button" id="startCamBtn" onclick="startCamera()" style="background:#0288d1; color:white; border:none; padding:5px 12px; border-radius:5px; font-size:12px; font-weight:bold; cursor:pointer;">📷 लाइव सेल्फी लें (Live Selfie)</button>
     </div>
-    <button onclick="completeCurrentYatra()" style="width:100%; padding:10px; background:#0288d1; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; margin-bottom:10px;">
-        ✅ यात्रा पूर्ण हुई (अगली यात्रा शुरू करें)
-    </button>
+
+    <!-- PRINTABLE / DOWNLOADABLE ID CARD -->
+    <div id="dynamicIdCard" style="border:3px solid #ff5722; border-radius:12px; padding:14px; background:#fffdf7; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <small style="color:#ff5722; font-weight:bold; display:block;">PARIKRAMAPATH OFFICIAL PASS</small>
+                <span id="idCardUniqueNo" style="font-size:11px; color:#555; font-weight:bold;">PP-000000</span>
+            </div>
+            <span id="cardRoleBadge" style="background:#2e7d32; color:white; padding:3px 9px; border-radius:10px; font-size:11px; font-weight:bold;">PILGRIM</span>
+        </div>
+
+        <h4 id="cardYatraTitle" style="margin:6px 0; color:#222; font-size:17px;">Yatra Name</h4>
+        <hr style="border:0; border-top:1px dashed #ccc; margin:8px 0;">
+
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div style="font-size:12.5px; line-height:1.55; flex:1;">
+                <p style="margin:2px 0;"><b>नाम:</b> <span id="cardUserName">-</span></p>
+                <p style="margin:2px 0;"><b>मोबाइल:</b> <span id="cardUserMobile">-</span></p>
+                <p style="margin:2px 0;"><b>🚩 आरंभ:</b> <span id="cardStartPoint">-</span></p>
+                <p style="margin:2px 0;"><b>🏁 समापन:</b> <span id="cardEndPoint">-</span></p>
+                <p style="margin:2px 0;"><b>🆘 आपातकालीन:</b> <span id="cardEmergency">-</span></p>
+                <p style="margin:2px 0;"><b>📍 पता/क्षेत्र:</b> <span id="cardAddress">-</span></p>
+            </div>
+            <div style="text-align:center;">
+                <img id="idCardPic" src="https://cdn-icons-png.flaticon.com/512/149/149071.png" style="width:62px; height:62px; border-radius:8px; object-fit:cover; border:1px solid #ddd; margin-bottom:5px; display:block;">
+                <div id="qrcodeBox" style="background:white; padding:3px; border:1px solid #ddd; display:inline-block;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- EDIT EMERGENCY & ADDRESS -->
+    <div style="background:#f5f5f5; padding:8px; border-radius:8px; margin-bottom:10px;">
+        <input type="tel" id="profileEmergencyInput" placeholder="🆘 आपातकालीन संपर्क नंबर (Emergency Mobile)" class="form-input" style="margin-bottom:5px; font-size:12px;">
+        <input type="text" id="profileAddressInput" placeholder="📍 पूरा पता या सेवा क्षेत्र (Village / City)" class="form-input" style="margin-bottom:6px; font-size:12px;">
+        <button type="button" onclick="saveProfileExtras()" style="width:100%; background:#455a64; color:white; border:none; padding:7px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">💾 सेल्फी व विवरण सुरक्षित करें</button>
+    </div>
+
+    <div style="display:flex; gap:6px; margin-bottom:10px;">
+        <button type="button" onclick="downloadIdCardPDF()" style="flex:1; padding:9px; background:#d84315; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">📄 ID Card PDF डाउनलोड</button>
+        <button type="button" onclick="completeCurrentYatra()" style="flex:1; padding:9px; background:#0288d1; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">✅ यात्रा पूर्ण हुई</button>
+    </div>
+
     <div id="journeyHistoryBox" style="font-size:12px; background:#f5f5f5; padding:8px; border-radius:6px;"></div>
 </div>
 
-<!-- ADMIN / MODERATOR MODAL (WITH YATRA CREATE / EDIT / DELETE) -->
+<!-- ADMIN / MODERATOR MODAL (WITH YATRA CRUD & AARTI MANAGER) -->
 <div id="adminModal" class="center-modal" style="display:none; max-width:520px;">
     <h3 style="margin-top:0;">⚙️ Parikramapath Admin Panel</h3>
     <div id="superAdminYatraCreator" style="display:none; background:#e3f2fd; padding:12px; border-radius:8px; margin-bottom:15px;">
@@ -383,7 +427,16 @@
     </div>
 
     <h4>⏳ Pending Padav Approvals (<span id="modYatraLabel"></span>)</h4>
-    <div id="pendingPadavsList" style="max-height:200px; overflow-y:auto;"></div>
+    <div id="pendingPadavsList" style="max-height:200px; overflow-y:auto; margin-bottom:15px;"></div>
+
+    <!-- ADMIN AARTI MANAGER (ACTIVE YATRA KE LIYE) -->
+    <div style="background:#fce4ec; padding:12px; border-radius:8px; border:1px solid #f48fb1;">
+        <h4 style="margin:0 0 8px 0; color:#ad1457;">🪔 आरती एवं स्तुति जोड़ें (<span id="adminAartiYatraLabel"></span>)</h4>
+        <input type="text" id="adminAartiTitle" placeholder="आरती का शीर्षक (e.g. श्री नर्मदा जी की आरती) *" class="form-input">
+        <textarea id="adminAartiContent" rows="4" placeholder="आरती के बोल यहाँ लिखें..." class="form-input"></textarea>
+        <button type="button" onclick="addYatraAarti()" class="primary-btn" style="background:#ad1457;">💾 आरती सेव करें</button>
+        <div id="adminAartiList" style="margin-top:10px; max-height:150px; overflow-y:auto;"></div>
+    </div>
 </div>
 
 <!-- AARTI MODAL -->
@@ -394,10 +447,10 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=5"></script>
-<script src="js/yatra-flow.js?v=5"></script>
-<script src="js/map.js?v=5"></script>
-<script src="js/auth-sos.js?v=5"></script>
-<script src="js/admin.js?v=5"></script>
+<script src="js/config.js?v=7"></script>
+<script src="js/yatra-flow.js?v=7"></script>
+<script src="js/map.js?v=7"></script>
+<script src="js/auth-sos.js?v=7"></script>
+<script src="js/admin.js?v=7"></script>
 </body>
 </html>
