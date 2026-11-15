@@ -3,8 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Parikramapath - भारत तीर्थ एवं परिक्रमा पोर्टल</title>
-    <meta name="description" content="Parikramapath par Bharat ki sabhi teerth yatra aur parikrama (Narmada, Braj 84 Kos, Char Dham) ke route, ashram, bhojan aur niyam dekhein.">
+    <title>Parikramapath - भारत तीर्थ एवं परिक्रमा पोर्टल (Live Route, Ashram & Niyam)</title>
+    <meta name="description" content="Parikramapath par Bharat ki sabhi teerth yatra aur parikrama (Narmada Parikrama, Girnar Parikrama, Braj 84 Kos) ke live route map, ashram, free bhojan aur niyam dekhein.">
+    <link rel="canonical" href="https://parikramapath.in/">
+
+    <!-- Open Graph / WhatsApp & Social Sharing Meta Tags -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Parikramapath">
+    <meta property="og:title" content="Parikramapath - भारत तीर्थ एवं परिक्रमा मार्गदर्शिका">
+    <meta property="og:description" content="नर्मदा, गिरनार, ब्रज 84 कोस सहित भारत की प्रमुख परिक्रमाओं के लाइव GPS रूट, आश्रम, सदाव्रत भोजन और नियमों की संपूर्ण जानकारी।">
+    <meta property="og:url" content="https://parikramapath.in/">
+
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="style.css" />
@@ -12,16 +21,19 @@
 <body>
 
 <!-- ========================================================= -->
-<!-- GATE 1: PARIKRAMAPATH YATRA SELECTION                     -->
+<!-- GATE 1: PARIKRAMAPATH YATRA SELECTION (HOME PAGE)         -->
 <!-- ========================================================= -->
-<div id="yatraGate" class="full-gate">
-    <div class="gate-box">
+<div id="yatraGate" class="full-gate" style="align-items:flex-start; overflow-y:auto; padding:20px 12px;">
+    <div class="gate-box" style="margin:auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
             <div>
                 <h1 id="lblBrandTitle" style="color:#d84315; margin:0; font-size:23px;">🕉️ परिक्रमापथ (Parikramapath)</h1>
                 <p id="lblBrandSub" style="color:#555; margin:4px 0 0 0; font-size:13px;">भारत की समस्त तीर्थ यात्रा एवं परिक्रमा मार्गदर्शिका</p>
             </div>
-            <button onclick="toggleLanguage()" id="langToggleBtn" class="pill-btn" style="background:#333; color:white;">🌐 English</button>
+            <div style="display:flex; gap:6px; align-items:center;">
+                <button onclick="openAuthModal()" class="pill-btn" style="background:#d84315; color:white;">🔑 Login</button>
+                <button onclick="toggleLanguage()" id="langToggleBtn" class="pill-btn" style="background:#333; color:white;">🌐 English</button>
+            </div>
         </div>
 
         <input type="text" id="yatraSearchInput" onkeyup="filterYatraCards()" placeholder="🔍 यात्रा या राज्य खोजें..." class="search-input" style="margin-top:15px;">
@@ -29,6 +41,34 @@
         <div id="yatraCardsGrid" class="yatra-grid">
             <p style="text-align:center; color:#777;">यात्राएं लोड हो रही हैं...</p>
         </div>
+
+        <!-- STATIC SEO CONTENT & FAQ SECTION FOR GOOGLE INDEXING & PILGRIMS -->
+        <section style="margin-top:24px; padding-top:18px; border-top:1px solid #eee; text-align:left; font-size:13px; color:#444; line-height:1.65;">
+            <h2 style="font-size:17px; color:#d84315; margin:0 0 8px 0;">🚩 परिक्रमापथ (Parikramapath) क्या है?</h2>
+            <p style="margin:0 0 12px 0;">
+                <strong>परिक्रमापथ</strong> भारत की पवित्र तीर्थ यात्राओं और परिक्रमा मार्गों (जैसे <strong>नर्मदा परिक्रमा, गिरनार परिक्रमा, ब्रज 84 कोस परिक्रमा</strong>) के लिए समर्पित एक डिजिटल मार्गदर्शिका और लाइव GPS पोर्टल है। यहाँ पैदल व वाहन यात्रियों को प्रत्येक पड़ाव के आश्रम, निःशुल्क सदाव्रत भोजन (अन्नक्षेत्र), पगडंडी व सड़क मार्ग की वास्तविक दूरी, तथा शास्त्रीय नियमों की सटीक जानकारी मिलती है।
+            </p>
+
+            <h3 style="font-size:15px; color:#2e7d32; margin:12px 0 6px 0;">❓ यात्रियों के लिए उपयोगी जानकारी (FAQ)</h3>
+            <ul style="margin:0 0 14px 18px; padding:0;">
+                <li style="margin-bottom:5px;"><strong>प्रारंभ और समापन स्थल:</strong> आप किसी भी पड़ाव से अपनी परिक्रमा शुरू कर सकते हैं—गोलाकार (Circular) परिक्रमा में जहाँ से यात्रा प्रारंभ होती है, वहीं समापन होता है।</li>
+                <li style="margin-bottom:5px;"><strong>नया पड़ाव या आश्रम कैसे जोड़ें?</strong> कोई भी पंजीकृत (Registered) यात्री या सेवादार लॉगिन करके नए पड़ाव की जानकारी और GPS लोकेशन जोड़ सकता है, जो एडमिन सत्यापन के बाद मैप पर लाइव हो जाती है।</li>
+                <li style="margin-bottom:5px;"><strong>आपातकालीन सहायता (SOS):</strong> यात्रा के दौरान मेडिकल, भोजन या मार्ग भटकने की स्थिति में SOS बटन से नजदीकी सेवादारों को तुरंत लोकेशन भेजी जा सकती है।</li>
+            </ul>
+
+            <!-- INTERNAL SEO LINKS FOOTER -->
+            <footer style="background:#fff8e1; padding:12px; border-radius:8px; border:1px solid #ffe082; font-size:12px;">
+                <div style="font-weight:bold; color:#e65100; margin-bottom:6px;">📖 प्रमुख यात्रा मार्गदर्शिकाएं (Yatra Guides):</div>
+                <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
+                    <a href="/yatra/narmada-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• नर्मदा परिक्रमा</a>
+                    <a href="/yatra/girnar-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• गिरनार परिक्रमा</a>
+                    <a href="/yatra/braj-84-kos-parikrama" style="color:#d84315; text-decoration:none; font-weight:bold;">• ब्रज 84 कोस परिक्रमा</a>
+                </div>
+                <div style="color:#666; border-top:1px dashed #ffd54f; padding-top:6px;">
+                    © 2026 Parikramapath.in — भारत तीर्थ एवं परिक्रमा सेवा पोर्टल
+                </div>
+            </footer>
+        </section>
     </div>
 </div>
 
@@ -318,11 +358,10 @@
         <input type="text" id="newYatraName" placeholder="Yatra Name English (e.g. Girnar Parikrama) *" class="form-input">
         <input type="text" id="newYatraNameHi" placeholder="यात्रा का नाम हिंदी (e.g. गिरनार परिक्रमा) *" class="form-input">
         <input type="text" id="newYatraState" placeholder="State (e.g. Gujarat) *" class="form-input">
+        <input type="number" step="0.1" id="newYatraDistance" placeholder="कुल दूरी km में (e.g. 36) *" class="form-input">
         <select id="newYatraType" class="form-input">
             <option value="circular">Circular Parikrama (Start = End)</option>
             <option value="point_to_point">Point-to-Point Yatra (Fixed End Point)</option>
-            <input type="text" id="newYatraState" placeholder="State (e.g. Gujarat) *" class="form-input">
-<input type="number" step="0.1" id="newYatraDistance" placeholder="कुल दूरी km में (e.g. 36) *" class="form-input">
         </select>
         <input type="text" id="newYatraEnd" placeholder="End Point (agar Point-to-Point hai)" class="form-input">
         <input type="text" id="newYatraSubRoutes" placeholder="Sub-routes comma se (e.g. Bhavnath, Bordevi)" class="form-input">
@@ -355,10 +394,10 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=3"></script>
-<script src="js/yatra-flow.js?v=3"></script>
-<script src="js/map.js?v=3"></script>
-<script src="js/auth-sos.js?v=3"></script>
-<script src="js/admin.js?v=3"></script>
+<script src="js/config.js?v=5"></script>
+<script src="js/yatra-flow.js?v=5"></script>
+<script src="js/map.js?v=5"></script>
+<script src="js/auth-sos.js?v=5"></script>
+<script src="js/admin.js?v=5"></script>
 </body>
 </html>
