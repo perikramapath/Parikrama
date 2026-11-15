@@ -521,7 +521,7 @@ async function loadAdminYatrasList() {
         <div style="display:flex; justify-content:space-between; align-items:center; background:white; padding:6px 8px; border-radius:5px; margin-bottom:5px; border:1px solid #bbdefb; font-size:12px;">
             <div>
                 <b>${y.name_hi || y.name}</b><br>
-                <small style="color:#666;">${y.state || ''} • ${y.slug}</small>
+                <small style="color:#666;">${y.state || ''} • ${y.total_distance_km || 0} km • ${y.slug}</small>
             </div>
             <div style="display:flex; gap:4px;">
                 <button type="button" onclick="editYatraInAdmin('${y.id}')" style="background:#ffc107; color:#000; border:none; padding:4px 7px; border-radius:4px; font-weight:bold; cursor:pointer;">✏️ Edit</button>
@@ -544,6 +544,8 @@ function editYatraInAdmin(yatraId) {
     document.getElementById('newYatraName').value = y.name || '';
     document.getElementById('newYatraNameHi').value = y.name_hi || '';
     document.getElementById('newYatraState').value = y.state || '';
+    const distEl = document.getElementById('newYatraDistance');
+    if (distEl) distEl.value = y.total_distance_km || '';
     document.getElementById('newYatraType').value = y.yatra_type || 'circular';
     document.getElementById('newYatraEnd').value = y.default_end_point || '';
     document.getElementById('newYatraSubRoutes').value = Array.isArray(y.sub_routes) ? y.sub_routes.join(', ') : '';
@@ -560,7 +562,7 @@ function resetYatraCreatorForm() {
     document.getElementById('saveYatraBtn').innerText = 'Create Yatra & SEO Page';
     document.getElementById('cancelYatraEditBtn').style.display = 'none';
 
-    ['newYatraSlug', 'newYatraName', 'newYatraNameHi', 'newYatraState', 'newYatraEnd',
+    ['newYatraSlug', 'newYatraName', 'newYatraNameHi', 'newYatraState', 'newYatraDistance', 'newYatraEnd',
      'newYatraSubRoutes', 'newYatraLat', 'newYatraLng', 'newYatraAbout', 'newYatraInfo', 'newYatraNiyam']
         .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
 }
@@ -568,12 +570,14 @@ function resetYatraCreatorForm() {
 async function saveYatraForm() {
     const editId = document.getElementById('editYatraId').value.trim();
     const subs = document.getElementById('newYatraSubRoutes').value.split(',').map(s => s.trim()).filter(Boolean);
+    const distEl = document.getElementById('newYatraDistance');
 
     const payload = {
         slug: document.getElementById('newYatraSlug').value.trim().toLowerCase(),
         name: document.getElementById('newYatraName').value.trim(),
         name_hi: document.getElementById('newYatraNameHi').value.trim(),
         state: document.getElementById('newYatraState').value.trim(),
+        total_distance_km: distEl ? (parseFloat(distEl.value) || 0) : 0,
         yatra_type: document.getElementById('newYatraType').value,
         default_end_point: document.getElementById('newYatraEnd').value.trim() || null,
         sub_routes: subs,
