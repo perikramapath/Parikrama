@@ -5,8 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title id="seoTitle">Parikramapath - Teerth Yatra Route, Ashram & Niyam</title>
     <meta name="description" id="seoDesc" content="Parikramapath par Bharat ki teerth yatra aur parikrama ke niyam, ashram aur route map dekhein.">
-    <link rel="stylesheet" href="style.css">
+    <link rel="canonical" id="seoCanonical" href="https://parikramapath.in/">
+    
+    <!-- Root-relative paths zaroori hain taaki /yatra/slug par CSS/JS fail na ho -->
+    <link rel="stylesheet" href="/style.css">
     <script type="application/ld+json" id="yatraSchema"></script>
+    
     <style>
         .guide-container { max-width: 860px; margin: 20px auto; background: white; padding: 25px; border-radius: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); line-height: 1.7; }
         .guide-nav { display: flex; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid #eee; padding-bottom: 12px; margin-bottom: 20px; }
@@ -16,14 +20,18 @@
         .cta-map-banner { background: linear-gradient(135deg, #ff5722, #ff9800); color: white; padding: 20px; border-radius: 12px; text-align: center; margin: 25px 0; }
         .cta-map-banner button { background: white; color: #d84315; border: none; padding: 12px 24px; border-radius: 25px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; }
         .padav-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 14px; }
-        .padav-table th, .padav-table td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        .padav-table th, .padav-table td { border: 1px solid #ddd; padding: 10px; text-align: left; vertical-align: top; }
         .padav-table th { background: #fff3e0; }
+        @media (max-width: 600px) {
+            .guide-container { padding: 15px; margin: 10px; }
+            .padav-table th, .padav-table td { padding: 7px; font-size: 12px; }
+        }
     </style>
 </head>
 <body>
 <div class="guide-container">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-        <a href="index.html" style="text-decoration:none; color:#d84315; font-weight:bold;">← Parikramapath Home</a>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px;">
+        <a href="/" style="text-decoration:none; color:#d84315; font-weight:bold;">← Parikramapath Home</a>
         <button onclick="launchThisYatraMap()" style="background:#2e7d32; color:white; border:none; padding:8px 16px; border-radius:20px; font-weight:bold; cursor:pointer;">🗺️ Live Route Map खोलें</button>
     </div>
 
@@ -49,7 +57,7 @@
 
     <div class="cta-map-banner">
         <h3 style="margin:0;">Parikramapath पर इस यात्रा के सभी आश्रम और लाइव मार्ग देखें</h3>
-        <p style="margin:5px 0 10px 0; font-size:14px;">अपना प्रारंभिक पड़ाव चुनें और ऑफलाइन मैप व SOS सुरक्षा पाएं।</p>
+        <p style="margin:5px 0 10px 0; font-size:14px;">अपना प्रारंभिक पड़ाव चुनें और लाइव GPS मैप व SOS सुरक्षा पाएं।</p>
         <button onclick="launchThisYatraMap()">🚩 यात्रा शुरू करें (Interactive Map)</button>
     </div>
 
@@ -62,51 +70,119 @@
         <h2>🛌 प्रमुख पड़ाव एवं आश्रम सूची</h2>
         <table class="padav-table">
             <thead>
-                <tr><th>पड़ाव / आश्रम</th><th>मार्ग</th><th>भोजन</th><th>निवास</th></tr>
+                <tr>
+                    <th>पड़ाव / स्थान एवं विवरण</th>
+                    <th>मार्ग</th>
+                    <th>भोजन</th>
+                    <th>निवास</th>
+                </tr>
             </thead>
-            <tbody id="seoPadavTableBody"></tbody>
+            <tbody id="seoPadavTableBody">
+                <tr><td colspan="4" style="text-align:center; color:#777;">पड़ाव लोड हो रहे हैं...</td></tr>
+            </tbody>
         </table>
     </section>
+
+    <footer style="margin-top:30px; padding-top:15px; border-top:1px solid #eee; text-align:center; font-size:12px; color:#666;">
+        <a href="/" style="color:#d84315; text-decoration:none; font-weight:bold;">Parikramapath.in</a> — भारत की समस्त तीर्थ यात्रा एवं परिक्रमा मार्गदर्शिका
+    </footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js"></script>
+<script src="/js/config.js?v=5"></script>
 <script>
     let loadedYatra = null;
-    async function loadYatraGuidePage() {
-        const slug = new URLSearchParams(window.location.search).get('slug');
-        if (!slug) { window.location.href = 'index.html'; return; }
 
-        const { data: yatra, error } = await supabaseClient.from('yatras').select('*').eq('slug', slug).single();
-        if (error || !yatra) { document.getElementById('guideH1').innerText = "यात्रा नहीं मिली"; return; }
+    async function loadYatraGuidePage() {
+        // 1. Clean URL (/yatra/girnar-parikrama) ya Query Param (?slug=girnar-parikrama) dono se slug nikalen
+        const pathMatch = window.location.pathname.match(/^\/yatra\/([^\/]+)/);
+        const slug = (pathMatch && pathMatch[1]) || new URLSearchParams(window.location.search).get('slug');
+
+        if (!slug) {
+            window.location.href = '/';
+            return;
+        }
+
+        const { data: yatra, error } = await supabaseClient
+            .from('yatras')
+            .select('*')
+            .eq('slug', slug)
+            .single();
+
+        if (error || !yatra) {
+            document.getElementById('guideH1').innerText = "यात्रा नहीं मिली (404)";
+            document.getElementById('aboutContent').innerHTML = '<p>क्षमा करें, यह यात्रा पृष्ठ उपलब्ध नहीं है। <a href="/">होम पेज पर जाएं</a>।</p>';
+            return;
+        }
         loadedYatra = yatra;
 
-        document.title = yatra.meta_title || `${yatra.name} - Information, Niyam & Route | Parikramapath`;
-        document.getElementById('seoDesc').setAttribute('content', yatra.meta_description || yatra.description);
-        document.getElementById('guideH1').innerText = `${yatra.icon_emoji} ${yatra.name_hi} (${yatra.name})`;
-        document.getElementById('guideSubtitle').innerText = `📍 राज्य: ${yatra.state} | कुल दूरी: ${yatra.total_distance_km} km`;
+        const displayName = yatra.name_hi ? `${yatra.name_hi} (${yatra.name})` : yatra.name;
+        const pageTitle = yatra.meta_title || `${displayName} - Route Map, Ashram & Niyam | Parikramapath`;
+        const pageDesc = yatra.meta_description || `${displayName} (${yatra.state}) ki sampurna jankari, ${yatra.total_distance_km || 0} km parikrama marg, ashram, bhojan aur niyam dekhein.`;
+        const canonicalUrl = `https://parikramapath.in/yatra/${yatra.slug}`;
 
-        document.getElementById('aboutContent').innerHTML = yatra.about_html || `<p>${yatra.description}</p>`;
+        document.title = pageTitle;
+        document.getElementById('seoDesc').setAttribute('content', pageDesc);
+        document.getElementById('seoCanonical').setAttribute('href', canonicalUrl);
+
+        document.getElementById('guideH1').innerText = `${yatra.icon_emoji || '🕉️'} ${displayName}`;
+        document.getElementById('guideSubtitle').innerText = `📍 राज्य: ${yatra.state || '-'} | कुल दूरी: ${yatra.total_distance_km || 0} km`;
+
+        document.getElementById('aboutContent').innerHTML = yatra.about_html || `<p>${yatra.description || 'जानकारी जल्द अपडेट होगी।'}</p>`;
         document.getElementById('infoContent').innerHTML = yatra.information_html || `<p>जानकारी जल्द अपडेट होगी।</p>`;
         document.getElementById('niyamContent').innerHTML = yatra.niyam_html || `<p>नियम जल्द अपडेट होंगे।</p>`;
 
+        // Structured Data (Schema.org) for Google Rich Results
         document.getElementById('yatraSchema').textContent = JSON.stringify({
             "@context": "https://schema.org",
             "@type": "TouristTrip",
-            "name": yatra.name,
-            "description": yatra.meta_description || yatra.description,
-            "provider": { "@type": "Organization", "name": "Parikramapath" }
+            "name": displayName,
+            "description": pageDesc,
+            "url": canonicalUrl,
+            "provider": {
+                "@type": "Organization",
+                "name": "Parikramapath",
+                "url": "https://parikramapath.in"
+            }
         });
 
-        const { data: padavs } = await supabaseClient.from('padavs').select('name, sub_route, bhojan_type, niwas_type').eq('yatra_id', yatra.id).eq('status', 'approved').order('sequence_no');
+        // Padav List + Descriptions for Google SEO Crawling
+        const { data: padavs } = await supabaseClient
+            .from('padavs')
+            .select('name, sub_route, category, description, bhojan_type, niwas_type')
+            .eq('yatra_id', yatra.id)
+            .eq('status', 'approved')
+            .order('sequence_no', { ascending: true });
+
         const tbody = document.getElementById('seoPadavTableBody');
-        tbody.innerHTML = (padavs && padavs.length) ? padavs.map(p => `
-            <tr><td><b>${p.name}</b></td><td>${p.sub_route || '-'}</td><td>${p.bhojan_type}</td><td>${p.niwas_type}</td></tr>
-        `).join('') : '<tr><td colspan="4">पड़ाव सूची जल्द जोड़ी जाएगी।</td></tr>';
+        if (padavs && padavs.length > 0) {
+            tbody.innerHTML = padavs.map(p => {
+                const descSnippet = p.description
+                    ? `<div style="font-size:12px; color:#555; margin-top:4px; line-height:1.5;">${p.description}</div>`
+                    : '';
+                return `
+                    <tr>
+                        <td>
+                            <b>${p.name}</b>
+                            ${descSnippet}
+                        </td>
+                        <td>${p.sub_route || '-'}</td>
+                        <td>${p.category === 'Point' ? 'मार्ग बिंदु' : (p.bhojan_type || '-')}</td>
+                        <td>${p.category === 'Point' ? 'केवल दर्शन/विश्राम' : (p.niwas_type || '-')}</td>
+                    </tr>
+                `;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#777;">पड़ाव सूची जल्द जोड़ी जाएगी।</td></tr>';
+        }
     }
+
     function launchThisYatraMap() {
-        if (loadedYatra) window.location.href = `index.html?yatra=${loadedYatra.slug}`;
+        if (loadedYatra) {
+            window.location.href = `/?yatra=${loadedYatra.slug}`;
+        }
     }
+
     window.addEventListener('DOMContentLoaded', loadYatraGuidePage);
 </script>
 </body>
