@@ -61,7 +61,7 @@ function renderYatraCards(list) {
             </div>
             <div style="display:flex; gap:8px; margin-top:10px; border-top:1px solid #eee; padding-top:8px;">
                 <button onclick="openStartPointGate('${y.id}')" style="flex:1; background:${y.theme_color}; color:white; border:none; padding:7px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">🚩 यात्रा शुरू करें</button>
-                <a href="/yatra/${y.slug}" style="flex:1; text-align:center; background:#fff3e0; color:#d84315; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📖 नियम व जानकारी</a>
+                <a href="/yatra-guide.html?slug=${y.slug}" style="flex:1; text-align:center; background:#fff3e0; color:#d84315; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📖 नियम व जानकारी</a>
             </div>
         `;
         grid.appendChild(card);
@@ -211,7 +211,9 @@ function openStartPointChanger() {
 }
 
 function openYatraSeoPage() {
-    if (window.activeYatra) window.open(`/yatra/${window.activeYatra.slug}`, '_blank');
+    if (window.activeYatra) {
+        window.open(`/yatra-guide.html?slug=${window.activeYatra.slug}`, '_blank');
+    }
 }
 
 window.addEventListener('DOMContentLoaded', loadAllYatras);
