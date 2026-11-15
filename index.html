@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parikramapath - भारत तीर्थ एवं परिक्रमा पोर्टल</title>
+    <meta name="description" content="Parikramapath par Bharat ki sabhi teerth yatra aur parikrama (Narmada, Braj 84 Kos, Char Dham) ke route, ashram, bhojan aur niyam dekhein.">
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ========================================================= -->
+<!-- GATE 1: PARIKRAMAPATH YATRA SELECTION                     -->
+<!-- ========================================================= -->
+<div id="yatraGate" class="full-gate">
+    <div class="gate-box">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <div>
+                <h1 id="lblBrandTitle" style="color:#d84315; margin:0; font-size:23px;">🕉️ परिक्रमापथ (Parikramapath)</h1>
+                <p id="lblBrandSub" style="color:#555; margin:4px 0 0 0; font-size:13px;">भारत की समस्त तीर्थ यात्रा एवं परिक्रमा मार्गदर्शिका</p>
+            </div>
+            <button onclick="toggleLanguage()" id="langToggleBtn" class="pill-btn" style="background:#333; color:white;">🌐 English</button>
+        </div>
+
+        <input type="text" id="yatraSearchInput" onkeyup="filterYatraCards()" placeholder="🔍 यात्रा या राज्य खोजें..." class="search-input" style="margin-top:15px;">
+
+        <div id="yatraCardsGrid" class="yatra-grid">
+            <p style="text-align:center; color:#777;">यात्राएं लोड हो रही हैं...</p>
+        </div>
+    </div>
+</div>
+
+<!-- ========================================================= -->
+<!-- GATE 2: STARTING POINT SELECTION (Dropdown + Search)      -->
+<!-- ========================================================= -->
+<div id="startPointGate" class="full-gate" style="display:none;">
+    <div class="gate-box" style="max-width:480px;">
+        <button onclick="backToYatraGate()" style="background:none; border:none; color:#d84315; font-weight:bold; cursor:pointer; padding:0; margin-bottom:10px;">← सभी यात्राएं (Parikramapath Home)</button>
+
+        <div id="selectedYatraHeader" style="background:#fff3e0; padding:12px; border-radius:10px; border-left:5px solid #ff5722; margin-bottom:15px;">
+            <h2 id="spYatraTitle" style="margin:0; font-size:19px; color:#222;">Yatra Name</h2>
+            <small id="spYatraMeta" style="color:#666;">State • Distance</small>
+        </div>
+
+        <h3 id="lblSelectStartTitle" style="margin:0 0 10px 0; font-size:16px; color:#333;">🚩 अपना प्रारंभिक पड़ाव (Starting Point) चुनें</h3>
+
+        <input type="text" id="startPointSearch" onkeyup="filterStartPointOptions()" placeholder="🔍 पड़ाव का नाम लिखकर खोजें..." class="search-input" style="margin-bottom:10px;">
+
+        <select id="startPointDropdown" onchange="onStartPointSelected(this.value)" size="6" style="width:100%; padding:8px; border-radius:8px; border:2px solid #ff9800; font-size:14px; margin-bottom:12px; outline:none;">
+            <option value="">-- पड़ाव लोड हो रहे हैं... --</option>
+        </select>
+
+        <div id="routeSummaryBox" style="display:none; background:#e8f5e9; padding:12px; border-radius:8px; border:1px solid #4caf50; margin-bottom:15px; font-size:13px;">
+            <p style="margin:3px 0;"><b>🚩 आरंभ (Start):</b> <span id="previewStartText">-</span></p>
+            <p style="margin:3px 0;"><b>🏁 समापन (End):</b> <span id="previewEndText">-</span></p>
+            <p style="margin:3px 0; color:#2e7d32; font-size:12px;" id="previewRuleNote"></p>
+        </div>
+
+        <button id="confirmStartBtn" onclick="launchYatraMap()" disabled style="width:100%; padding:13px; background:#ccc; color:white; border:none; border-radius:8px; font-size:16px; font-weight:bold; cursor:not-allowed;">
+            परिक्रमा शुरू करें ➔
+        </button>
+    </div>
+</div>
+
+<!-- ========================================================= -->
+<!-- MAIN INTERACTIVE MAP INTERFACE                            -->
+<!-- ========================================================= -->
+
+<div id="mainAppContainer" style="display:none;">
+    <div class="top-bar">
+        <button onclick="backToYatraGate()" id="activeYatraBtn" class="pill-btn" style="background:#ff5722; color:white;">
+            🔄 <span id="activeYatraName">Parikramapath</span>
+        </button>
+
+        <button onclick="openStartPointChanger()" class="pill-btn" style="background:#2e7d32; color:white;">
+            🚩 <span id="activeStartBadge">Start Point</span>
+        </button>
+
+        <select id="subRouteFilter" onchange="applyMapFilters()" class="pill-select">
+            <option value="all">🗺️ सभी मार्ग</option>
+        </select>
+
+        <select id="categoryFilter" onchange="applyMapFilters()" class="pill-select">
+            <option value="all">📍 सभी स्थान</option>
+            <option value="Ashram">🛌 आश्रम / निवास</option>
+            <option value="Mandir">🛕 मंदिर</option>
+            <option value="Annakshetra">🍛 अन्नक्षेत्र</option>
+            <option value="Medical">🏥 मेडिकल</option>
+        </select>
+    </div>
+
+    <button onclick="openSOSModal()" class="sos-float-btn">🚨 SOS</button>
+    <button onclick="toggleMenu()" class="menu-btn">☰ Menu</button>
+<div id="dropdownMenu" class="dropdown-content">
+    <button onclick="backToYatraGate(); toggleMenu();">🔄 यात्रा बदलें</button>
+    <button onclick="openStartPointChanger(); toggleMenu();">🚩 प्रारंभ स्थल बदलें</button>
+    <button onclick="openYatraSeoPage(); toggleMenu();">📖 यात्रा के नियम एवं जानकारी</button>
+    <button onclick="openAddPadavModal(); toggleMenu();">➕ नया पड़ाव / पॉइंट जोड़ें</button>
+    <button onclick="openAartiModal(); toggleMenu();">🪔 आरती एवं स्तुति</button>
+    <button id="profileMenuBtn" style="display:none;" onclick="openProfileModal(); toggleMenu();">🪪 मेरा ID कार्ड</button>
+    <button id="adminMenuBtn" style="display:none;" onclick="openAdminModal(); toggleMenu();">⚙️ Admin Panel</button>
+    <button id="manualDrawMenuBtn" style="display:none; background:#e8f5e9; color:#1b5e20; font-weight:bold;" onclick="startManualLineDrawing(); toggleMenu();">✏️ मार्ग बनाएं (Line Draw)</button>
+    <button id="gpsFollowMenuBtn" style="display:none; background:#0288d1; color:white; font-weight:bold;" onclick="startGpsFollowRecording(); toggleMenu();">📡 GPS Follow (लाइव मार्ग)</button>
+    <button onclick="toggleLanguage(); toggleMenu();" id="menuLangBtn">🌐 English</button>
+    <button id="loginMenuBtn" onclick="openAuthModal(); toggleMenu();">🔑 Login / Register</button>
+    <button id="logoutMenuBtn" style="display:none; color:#dc3545;" onclick="logoutUser(); toggleMenu();">🚪 Logout</button>
+</div>
+
+<!-- 1. MANUAL POINT-TO-POINT LINE DRAW TOOLBAR -->
+<div id="manualDrawToolbar" style="display:none; position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:2000; background:white; padding:12px 15px; border-radius:12px; box-shadow:0 4px 18px rgba(0,0,0,0.35); width:92%; max-width:420px; border:2px solid #2e7d32; font-family:sans-serif;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <b style="color:#2e7d32; font-size:13px;">✏️ मार्ग बनाएं (Point-to-Point Line)</b>
+        <span id="manualPointsCount" style="font-size:11px; background:#e8f5e9; color:#1b5e20; padding:2px 7px; border-radius:10px; font-weight:bold;">0 points</span>
+    </div>
+    <div id="manualDrawStatus" style="font-size:11px; color:#555; margin-bottom:8px;">
+        मैप पर एक बिंदु से दूसरे बिंदु तक क्लिक करके लाइन खींचें।
+    </div>
+    <div style="margin-bottom:8px;">
+        <label style="display:inline-flex; align-items:center; gap:5px; background:#f5f5f5; padding:4px 8px; border-radius:6px; font-size:12px; border:1px solid #ddd; cursor:pointer;">
+            <input type="checkbox" id="chkSnapToRoad" checked> 🛣️ सड़क के अनुसार मोड़ें (Road Snap)
+        </label>
+    </div>
+    <div style="display:flex; gap:6px;">
+        <button type="button" onclick="undoManualDrawPoint()" style="background:#ff9800; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">↩️ Undo</button>
+        <button type="button" onclick="saveManualDrawnRoute()" style="flex:1; background:#2e7d32; color:white; border:none; padding:7px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">💾 मार्ग सेव करें</button>
+        <button type="button" onclick="cancelManualLineDrawing()" style="background:#dc3545; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">✖</button>
+    </div>
+</div>
+
+<!-- 2. ALAG GPS FOLLOW ROUTE RECORDER TOOLBAR (ANTI-JUMP) -->
+<div id="gpsFollowToolbar" style="display:none; position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:2000; background:white; padding:12px 15px; border-radius:12px; box-shadow:0 4px 18px rgba(0,0,0,0.35); width:92%; max-width:420px; border:2px solid #0288d1; font-family:sans-serif;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <b style="color:#0288d1; font-size:13px;">📡 GPS Follow (लाइव मार्ग रिकॉर्डिंग)</b>
+        <span id="gpsPointsCount" style="font-size:11px; background:#e1f5fe; color:#01579b; padding:2px 7px; border-radius:10px; font-weight:bold;">0 points</span>
+    </div>
+    <div id="gpsFollowStatus" style="font-size:11px; color:#333; margin-bottom:8px;">
+        ⏳ सटीक GPS सिग्नल की प्रतीक्षा हो रही है...
+    </div>
+    <div style="display:flex; gap:6px;">
+        <button type="button" id="btnPauseResumeGps" onclick="pauseResumeGpsFollow()" style="background:#ff9800; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">⏸️ रोकें</button>
+        <button type="button" onclick="saveGpsFollowedRoute()" style="flex:1; background:#0288d1; color:white; border:none; padding:7px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">💾 GPS मार्ग सेव करें</button>
+        <button type="button" onclick="cancelGpsFollowRecording()" style="background:#dc3545; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">✖</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<!-- MODALS BACKDROP -->
+<div id="modalBackdrop" class="modal-backdrop" style="display:none;" onclick="closeAllModals()"></div>
+
+<!-- ADD / EDIT PADAV MODAL (CLEAN - ONLY NEXT PADAVS) -->
+<div id="addPadavModal" class="center-modal" style="display:none;">
+    <h3 id="padavModalHeading" style="margin-top:0; color:#d84315;">➕ नया पड़ाव / आश्रम जोड़ें</h3>
+    <input type="hidden" id="editPadavId" value="">
+    <p style="font-size:12px; color:#666;">यात्रा: <b><span id="addPadavYatraName"></span></b></p>
+
+    <input type="text" id="newPadavName" placeholder="पड़ाव / आश्रम का नाम *" class="form-input">
+    <select id="newPadavSubRoute" class="form-input"></select>
+
+    <select id="newPadavCat" onchange="onPadavCategoryChange()" class="form-input">
+    <option value="Ashram">🛌 आश्रम / धर्मशाला</option>
+    <option value="Mandir">🛕 मंदिर</option>
+    <option value="Annakshetra">🍛 अन्नक्षेत्र (भोजन)</option>
+    <option value="Medical">🏥 मेडिकल कैंप</option>
+    <option value="Point">📍 मार्ग बिंदु / लैंडमार्क (Point)</option>
+</select>
+
+    <!-- MULTIPLE RASTE SELECTION -->
+    <div style="background:#fff3e0; padding:10px; border-radius:8px; border:1px solid #ffb74d; margin-bottom:10px;">
+        <label style="font-size:12px; font-weight:bold; color:#d84315; display:block; margin-bottom:6px;">
+            🥾 मार्ग का प्रकार चुनें (एक से अधिक चुन सकते हैं):
+        </label>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; font-size:13px;">
+            <label><input type="checkbox" class="pathTypeChk" value="🥾 पगडंडी (Pagdandi)"> 🥾 पगडंडी</label>
+            <label><input type="checkbox" class="pathTypeChk" value="🛣️ पक्का रोड (Road)"> 🛣️ पक्का रोड</label>
+            <label><input type="checkbox" class="pathTypeChk" value="🌾 कच्चा रास्ता"> 🌾 कच्चा रास्ता</label>
+            <label><input type="checkbox" class="pathTypeChk" value="⛰️ पहाड़ी रास्ता"> ⛰️ पहाड़ी रास्ता</label>
+            <label><input type="checkbox" class="pathTypeChk" value="🌊 नदी किनारा / तट"> 🌊 नदी किनारा / तट</label>
+            <label><input type="checkbox" class="pathTypeChk" value="🌲 जंगल मार्ग"> 🌲 जंगल मार्ग</label>
+        </div>
+    </div>
+
+    <select id="newPadavBhojan" class="form-input">
+        <option value="Free / Sadavrat">🍛 भोजन: निःशुल्क / सदाव्रत</option>
+        <option value="Paid">🍛 भोजन: सशुल्क (Paid)</option>
+        <option value="Not Available">🍛 भोजन: उपलब्ध नहीं</option>
+    </select>
+
+    <select id="newPadavNiwas" class="form-input">
+        <option value="Ashram / Dharamshala">🛌 निवास: आश्रम / धर्मशाला</option>
+        <option value="Tent / Hall">🛌 निवास: टेंट / हॉल</option>
+        <option value="Room Available">🛌 निवास: कमरे उपलब्ध</option>
+        <option value="No Stay">🛌 निवास: केवल विश्राम</option>
+    </select>
+
+    <div style="display:flex; gap:10px; font-size:13px; margin:8px 0;">
+        <label><input type="checkbox" id="chkWater" checked> 🚰 पानी</label>
+        <label><input type="checkbox" id="chkToilet" checked> 🚻 शौचालय</label>
+        <label><input type="checkbox" id="chkMedical"> 💊 मेडिकल</label>
+    </div>
+
+    <!-- GPS COORDINATES -->
+    <label style="font-size:12px; font-weight:bold; color:#333; display:block; margin-bottom:4px;">📍 इस पड़ाव की GPS लोकेशन *</label>
+    <div style="display:flex; gap:5px; margin-bottom:10px;">
+        <input type="text" id="newPadavLat" oninput="recalculateAllAddedNextPadavs()" placeholder="Latitude *" class="form-input" style="margin:0;">
+        <input type="text" id="newPadavLng" oninput="recalculateAllAddedNextPadavs()" placeholder="Longitude *" class="form-input" style="margin:0;">
+        <button type="button" onclick="fillCurrentGPS()" style="background:#0288d1; color:white; border:none; border-radius:5px; padding:0 12px; cursor:pointer; font-weight:bold;">📍 GPS</button>
+    </div>
+
+    <!-- AGLA PADAV SELECTOR (1 ya 2-3 agle padav aur unka rasta) -->
+    <div style="background:#f1f8e9; padding:10px; border-radius:8px; border:1px solid #aed581; margin-bottom:10px;">
+        <label style="font-size:12px; font-weight:bold; color:#33691e; display:block; margin-bottom:5px;">
+            ➡️ अगला पड़ाव चुनें (एक से अधिक जोड़ने के लिए '+ जोड़ें' दबाएं):
+        </label>
+        <select id="nextPadavPicker" class="form-input" style="margin-bottom:6px;">
+            <option value="">-- अगला पड़ाव चुनें --</option>
+        </select>
+        <div style="display:flex; gap:5px; margin-bottom:6px;">
+            <select id="nextPadavPathSelect" class="form-input" style="margin:0; flex:1;">
+                <option value="🥾 पगडंडी">🥾 पगडंडी से</option>
+                <option value="🛣️ पक्का रोड">🛣️ पक्का रोड से</option>
+                <option value="🌾 कच्चा रास्ता">🌾 कच्चा रास्ता से</option>
+                <option value="⛰️ पहाड़ी रास्ता">⛰️ पहाड़ी रास्ता से</option>
+                <option value="🌊 नदी किनारा">🌊 नदी किनारा से</option>
+            </select>
+            <button type="button" onclick="addNextPadavToList()" style="background:#2e7d32; color:white; border:none; border-radius:5px; padding:0 12px; font-weight:bold; cursor:pointer;">+ जोड़ें</button>
+        </div>
+        <div id="selectedNextPadavsList" style="font-size:12px;"></div>
+    </div>
+
+    <input type="text" id="newPadavContactName" placeholder="महंत / सेवादार का नाम" class="form-input">
+    <input type="tel" id="newPadavContactNo" placeholder="मोबाइल नंबर" class="form-input">
+
+    <button type="button" onclick="submitNewPadav()" class="primary-btn">💾 सुरक्षित करें</button>
+</div>
+
+    <!-- GPS COORDINATES -->
+    <label style="font-size:12px; font-weight:bold; color:#333; display:block; margin-bottom:4px;">📍 इस पड़ाव की GPS लोकेशन *</label>
+    <div style="display:flex; gap:5px; margin-bottom:10px;">
+        <input type="text" id="newPadavLat" oninput="recalculateAllAddedNextPadavs()" placeholder="Latitude *" class="form-input" style="margin:0;">
+        <input type="text" id="newPadavLng" oninput="recalculateAllAddedNextPadavs()" placeholder="Longitude *" class="form-input" style="margin:0;">
+        <button type="button" onclick="fillCurrentGPS()" style="background:#0288d1; color:white; border:none; border-radius:5px; padding:0 12px; cursor:pointer; font-weight:bold;">📍 GPS</button>
+    </div>
+
+    <!-- MULTIPLE NEXT PADAVS SELECTOR (2-3 agle padav aur unka rasta chunein) -->
+    <div style="background:#f1f8e9; padding:10px; border-radius:8px; border:1px solid #aed581; margin-bottom:10px;">
+        <label style="font-size:12px; font-weight:bold; color:#33691e; display:block; margin-bottom:5px;">
+            ➡️ यहाँ से आगे जाने वाले पड़ाव जोड़ें (2-3 रास्ते जोड़ सकते हैं):
+        </label>
+        <select id="nextPadavPicker" class="form-input" style="margin-bottom:6px;">
+            <option value="">-- अगला पड़ाव चुनें --</option>
+        </select>
+        <div style="display:flex; gap:5px; margin-bottom:6px;">
+            <select id="nextPadavPathSelect" class="form-input" style="margin:0; flex:1;">
+                <option value="🥾 पगडंडी">🥾 पगडंडी से</option>
+                <option value="🛣️ पक्का रोड">🛣️ पक्का रोड से</option>
+                <option value="🌾 कच्चा रास्ता">🌾 कच्चा रास्ता से</option>
+                <option value="⛰️ पहाड़ी रास्ता">⛰️ पहाड़ी रास्ता से</option>
+                <option value="🌊 नदी किनारा">🌊 नदी किनारा से</option>
+            </select>
+            <button type="button" onclick="addNextPadavToList()" style="background:#2e7d32; color:white; border:none; border-radius:5px; padding:0 12px; font-weight:bold; cursor:pointer;">+ जोड़ें</button>
+        </div>
+        <div id="selectedNextPadavsList" style="font-size:12px;"></div>
+    </div>
+
+    <input type="text" id="newPadavContactName" placeholder="महंत / सेवादार का नाम" class="form-input">
+    <input type="tel" id="newPadavContactNo" placeholder="मोबाइल नंबर" class="form-input">
+
+    <button type="button" onclick="submitNewPadav()" class="primary-btn">💾 सुरक्षित करें</button>
+</div>
+
+<!-- SOS MODAL -->
+<div id="sosModal" class="center-modal" style="display:none; text-align:center;">
+    <h2 style="color:#dc3545; margin-top:0;">🚨 Parikramapath SOS</h2>
+    <p style="font-size:13px; color:#555;">आपकी लोकेशन <b><span id="sosYatraName"></span></b> के नजदीकी सेवादारों को भेजी जाएगी।</p>
+    <button onclick="triggerSOS('Medical Emergency 🚑')" class="sos-opt-btn" style="background:#dc3545;">🚑 मेडिकल सहायता</button>
+    <button onclick="triggerSOS('Food / Water Required 🍛')" class="sos-opt-btn" style="background:#ff9800;">🍛 भोजन / पानी</button>
+    <button onclick="triggerSOS('Stay Required 🛌')" class="sos-opt-btn" style="background:#0288d1;">🛌 रात्रि विश्राम</button>
+    <button onclick="triggerSOS('Lost Route 🧭')" class="sos-opt-btn" style="background:#333;">🧭 मार्ग भटक गए हैं</button>
+</div>
+
+<!-- AUTH MODAL -->
+<div id="authModal" class="center-modal" style="display:none;">
+    <h3 style="margin-top:0; color:#ff5722;">🔑 Parikramapath Login</h3>
+    <div id="loginSection">
+        <input type="email" id="loginEmail" placeholder="Email" class="form-input">
+        <input type="password" id="loginPass" placeholder="Password" class="form-input">
+        <button onclick="loginUser()" class="primary-btn">Login</button>
+        <p style="text-align:center; font-size:13px; cursor:pointer; color:#0277bd;" onclick="toggleAuthForm('signup')">नया अकाउंट बनाएं (Register)</p>
+    </div>
+    <div id="signupSection" style="display:none;">
+        <select id="regRole" onchange="onRoleChange()" class="form-input" style="font-weight:bold;">
+            <option value="pilgrim">🚶 यात्री (Pilgrim)</option>
+            <option value="supporter">🤝 सेवादार (Volunteer)</option>
+        </select>
+        <input type="text" id="regName" placeholder="पूरा नाम *" class="form-input">
+        <input type="tel" id="regMobile" placeholder="मोबाइल नंबर *" class="form-input">
+        <input type="email" id="regEmail" placeholder="Email *" class="form-input">
+        <input type="password" id="regPass" placeholder="Password *" class="form-input">
+        <div id="sevadarRegFields" style="display:none; background:#fff8e1; padding:10px; border-radius:6px; margin-bottom:10px; border:1px solid #ffb300;">
+            <label style="font-size:12px; font-weight:bold;">किस यात्रा में सेवा देंगे?</label>
+            <select id="regSevadarYatra" class="form-input"></select>
+            <input type="text" id="regSevadarArea" placeholder="सेवा क्षेत्र / पड़ाव (e.g. Omkareshwar)" class="form-input">
+        </div>
+        <button onclick="registerUser()" class="primary-btn">Register</button>
+        <p style="text-align:center; font-size:13px; cursor:pointer; color:#0277bd;" onclick="toggleAuthForm('login')">पहले से अकाउंट है? Login करें</p>
+    </div>
+</div>
+
+<!-- PROFILE & DYNAMIC ID CARD MODAL -->
+<div id="profileModal" class="center-modal" style="display:none;">
+    <h3 style="margin-top:0; text-align:center; color:#2e7d32;">🪪 Parikramapath ID Pass</h3>
+    <div id="dynamicIdCard" style="border:3px solid #ff5722; border-radius:12px; padding:15px; background:#fffdf7; margin-bottom:12px;">
+        <small style="color:#ff5722; font-weight:bold;">PARIKRAMAPATH OFFICIAL PASS</small>
+        <h4 id="cardYatraTitle" style="margin:3px 0 5px 0; color:#222; font-size:17px;">Yatra Name</h4>
+        <span id="cardRoleBadge" style="background:#2e7d32; color:white; padding:2px 8px; border-radius:10px; font-size:11px;">PILGRIM</span>
+        <hr style="border:0; border-top:1px dashed #ccc; margin:10px 0;">
+        <p style="margin:4px 0; font-size:13px;"><b>नाम:</b> <span id="cardUserName">-</span></p>
+        <p style="margin:4px 0; font-size:13px;"><b>मोबाइल:</b> <span id="cardUserMobile">-</span></p>
+        <p style="margin:4px 0; font-size:13px;"><b>🚩 आरंभ स्थल:</b> <span id="cardStartPoint">-</span></p>
+        <p style="margin:4px 0; font-size:13px;"><b>🏁 समापन स्थल:</b> <span id="cardEndPoint">-</span></p>
+    </div>
+    <button onclick="completeCurrentYatra()" style="width:100%; padding:10px; background:#0288d1; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; margin-bottom:10px;">
+        ✅ यात्रा पूर्ण हुई (अगली यात्रा शुरू करें)
+    </button>
+    <div id="journeyHistoryBox" style="font-size:12px; background:#f5f5f5; padding:8px; border-radius:6px;"></div>
+</div>
+
+<!-- ADMIN / MODERATOR MODAL (With SEO Content Creator) -->
+<div id="adminModal" class="center-modal" style="display:none; max-width:520px;">
+    <h3 style="margin-top:0;">⚙️ Parikramapath Admin Panel</h3>
+    <div id="superAdminYatraCreator" style="display:none; background:#e3f2fd; padding:12px; border-radius:8px; margin-bottom:15px;">
+        <h4 style="margin:0 0 8px 0; color:#1565c0;">➕ नई यात्रा व SEO पेज जोड़ें (Super Admin)</h4>
+        <input type="text" id="newYatraSlug" placeholder="URL Slug (e.g. girnar-parikrama) *" class="form-input">
+        <input type="text" id="newYatraName" placeholder="Yatra Name English (e.g. Girnar Parikrama) *" class="form-input">
+        <input type="text" id="newYatraNameHi" placeholder="यात्रा का नाम हिंदी (e.g. गिरनार परिक्रमा) *" class="form-input">
+        <input type="text" id="newYatraState" placeholder="State (e.g. Gujarat) *" class="form-input">
+        <select id="newYatraType" class="form-input">
+            <option value="circular">Circular Parikrama (Start = End)</option>
+            <option value="point_to_point">Point-to-Point Yatra (Fixed End Point)</option>
+        </select>
+        <input type="text" id="newYatraEnd" placeholder="End Point (agar Point-to-Point hai)" class="form-input">
+        <input type="text" id="newYatraSubRoutes" placeholder="Sub-routes comma se (e.g. Bhavnath, Bordevi)" class="form-input">
+        <div style="display:flex; gap:5px;">
+            <input type="text" id="newYatraLat" placeholder="Center Lat *" class="form-input">
+            <input type="text" id="newYatraLng" placeholder="Center Lng *" class="form-input">
+        </div>
+        <textarea id="newYatraAbout" rows="2" placeholder="About Yatra (HTML/Text for SEO)" class="form-input"></textarea>
+        <textarea id="newYatraInfo" rows="2" placeholder="Information (Distance, Best Time for SEO)" class="form-input"></textarea>
+        <textarea id="newYatraNiyam" rows="2" placeholder="Niyam / Rules (for SEO)" class="form-input"></textarea>
+        <button onclick="createNewYatra()" class="primary-btn" style="background:#1565c0;">Create Yatra & SEO Page</button>
+    </div>
+
+    <h4>⏳ Pending Padav Approvals (<span id="modYatraLabel"></span>)</h4>
+    <div id="pendingPadavsList" style="max-height:200px; overflow-y:auto;"></div>
+</div>
+
+<!-- AARTI MODAL -->
+<div id="aartiModal" class="center-modal" style="display:none;">
+    <h3 style="margin-top:0; color:#e91e63;">🪔 <span id="aartiYatraTitle"></span> - आरती</h3>
+    <div id="aartiContainer" style="max-height:300px; overflow-y:auto;"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js?v=2"></script>
+<script src="js/yatra-flow.js?v=2"></script>
+<script src="js/map.js?v=2"></script>
+<script src="js/auth-sos.js?v=2"></script>
+<script src="js/admin.js?v=2"></script>
+</body>
+</html>
