@@ -1,8 +1,23 @@
 // =========================================================
-// PARIKRAMAPATH - ADMIN, YATRA CRUD & PADAV APPROVAL SYSTEM
+// PARIKRAMAPATH - ADMIN, YATRA CRUD, FORMATTER & PADAV APPROVAL
 // =========================================================
 
 window.tempNextPadavs = [];
+
+function getCleanUserRole() {
+    if (!window.currentProfile || !window.currentProfile.role) return '';
+    return window.currentProfile.role.toLowerCase().trim().replace(/\s+/g, '_');
+}
+
+function isAdminUser() {
+    const r = getCleanUserRole();
+    return (r === 'super_admin' || r === 'admin' || r === 'moderator');
+}
+
+function isSuperAdminUser() {
+    const r = getCleanUserRole();
+    return (r === 'super_admin' || r === 'admin');
+}
 
 function setupPadavModalDropdowns(excludePadavId = null) {
     document.getElementById('addPadavYatraName').innerText = window.activeYatra.name;
@@ -69,18 +84,19 @@ async function fetchActualRoadKm(lat1, lng1, lat2, lng2) {
     return parseFloat((R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.25).toFixed(1));
 }
 
-// 1A. MENU SE PADAV MODAL KHOLNA (REGISTERED USER CHECK KE SAATH)
+// =========================================================
+// 1. PADAV ADD / EDIT / DELETE (WITH REGISTERED USER APPROVAL)
+// =========================================================
 function openAddPadavModal() {
     if (!window.activeYatra) return;
 
-    // Sirf logged-in / registered users hi padav add kar sakte hain
     if (!window.currentUser) {
         alert("🔑 नया पड़ाव जोड़ने के लिए कृपया पहले Login या Register करें।");
         openAuthModal();
         return;
     }
 
-    const isAdmin = window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+    const isAdmin = isAdminUser();
     const noticeEl = document.getElementById('padavApprovalNotice');
     if (noticeEl) noticeEl.style.display = isAdmin ? 'none' : 'block';
 
@@ -89,7 +105,8 @@ function openAddPadavModal() {
     if (heading) heading.innerText = '➕ नया पड़ाव / आश्रम जोड़ें';
 
     document.getElementById('newPadavName').value = '';
-    document.getElementById('newPadavDescription').value = '';
+    const descEl = document.getElementById('newPadavDescription');
+    if (descEl) descEl.value = '';
     document.getElementById('newPadavContactName').value = '';
     document.getElementById('newPadavContactNo').value = '';
     document.getElementById('newPadavLat').value = '';
@@ -132,7 +149,6 @@ function openAddPadavAtCoords(lat, lng) {
     document.getElementById('newPadavLng').value = lng;
 }
 
-// 2. EXISTING PADAV EDIT KARNA (REGISTERED USERS & ADMINS DONO KE LIYE)
 function openEditPadavModal(padavId) {
     if (!window.currentUser) {
         alert("🔑 पड़ाव संपादित (Edit) करने के लिए कृपया पहले Login करें।");
@@ -143,7 +159,7 @@ function openEditPadavModal(padavId) {
     const p = window.activeYatraPadavs.find(item => item.id === padavId);
     if (!p) return;
 
-    const isAdmin = window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+    const isAdmin = isAdminUser();
     const noticeEl = document.getElementById('padavApprovalNotice');
     if (noticeEl) noticeEl.style.display = isAdmin ? 'none' : 'block';
 
@@ -156,7 +172,8 @@ function openEditPadavModal(padavId) {
     document.getElementById('newPadavName').value = p.name || '';
     document.getElementById('newPadavSubRoute').value = p.sub_route || '';
     document.getElementById('newPadavCat').value = p.category || 'Ashram';
-    document.getElementById('newPadavDescription').value = p.description || '';
+    const descEl = document.getElementById('newPadavDescription');
+    if (descEl) descEl.value = p.description || '';
     document.getElementById('newPadavBhojan').value = p.bhojan_type || 'Free / Sadavrat';
     document.getElementById('newPadavNiwas').value = p.niwas_type || 'Ashram / Dharamshala';
     document.getElementById('chkWater').checked = !!p.has_water;
@@ -195,7 +212,6 @@ function openEditPadavModal(padavId) {
     showModal('addPadavModal');
 }
 
-// 3. PADAV DELETE KARNA (SIRF ADMIN/MODERATOR)
 async function deletePadav(padavId) {
     const p = window.activeYatraPadavs.find(item => item.id === padavId);
     const label = p ? p.name : 'इस पड़ाव';
@@ -296,7 +312,7 @@ async function submitNewPadav() {
     }
 
     const editId = document.getElementById('editPadavId').value.trim();
-    const isAdmin = window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
+    const isAdmin = isAdminUser();
 
     const picker = document.getElementById('nextPadavPicker');
     if (picker && picker.value) {
@@ -305,13 +321,14 @@ async function submitNewPadav() {
 
     const selectedPaths = Array.from(document.querySelectorAll('.pathTypeChk:checked')).map(cb => cb.value);
     const cleanNextList = window.tempNextPadavs.map(({ id, name, path, km }) => ({ id, name, path, km }));
+    const descEl = document.getElementById('newPadavDescription');
 
     const obj = {
         yatra_id: window.activeYatra.id,
         name: document.getElementById('newPadavName').value.trim(),
         sub_route: document.getElementById('newPadavSubRoute').value,
         category: document.getElementById('newPadavCat').value,
-        description: document.getElementById('newPadavDescription').value.trim(),
+        description: descEl ? descEl.value.trim() : '',
         path_types: selectedPaths,
         bhojan_type: document.getElementById('newPadavBhojan').value,
         niwas_type: document.getElementById('newPadavNiwas').value,
@@ -341,7 +358,6 @@ async function submitNewPadav() {
             closeAllModals();
             alert("✅ पड़ाव की जानकारी अपडेट हो गई है!");
         } else {
-            // Non-admin ne edit kiya hai to approval ke liye pending ho gaya
             window.activeYatraPadavs = window.activeYatraPadavs.filter(item => item.id !== editId);
             renderIsolatedPadavs(window.activeYatraPadavs);
             closeAllModals();
@@ -363,13 +379,16 @@ async function submitNewPadav() {
 }
 
 // =========================================================
-// ADMIN MODAL: PENDING PADAVS + YATRA CREATE / EDIT / DELETE
+// 2. ADMIN MODAL: PENDING PADAVS + YATRA CREATE / EDIT / DELETE
 // =========================================================
 async function openAdminModal() {
     showModal('adminModal');
-    const isSuperAdmin = window.currentProfile && window.currentProfile.role === 'super_admin';
-    document.getElementById('superAdminYatraCreator').style.display = isSuperAdmin ? 'block' : 'none';
-    document.getElementById('modYatraLabel').innerText = window.activeYatra.name;
+    const isSuperAdmin = isSuperAdminUser();
+    const creatorBox = document.getElementById('superAdminYatraCreator');
+    if (creatorBox) {
+        creatorBox.style.display = isSuperAdmin ? 'block' : 'none';
+    }
+    document.getElementById('modYatraLabel').innerText = window.activeYatra ? window.activeYatra.name : '';
 
     if (isSuperAdmin) {
         resetYatraCreatorForm();
@@ -416,7 +435,75 @@ async function rejectPendingPadav(id) {
     openAdminModal();
 }
 
-// YATRA LIST, CREATE, EDIT & DELETE FUNCTIONS
+// =========================================================
+// 3. YATRA SMART TEXT FORMATTER & CRUD (EDIT / DELETE)
+// =========================================================
+function formatTextToCleanHtml(rawText) {
+    const text = (rawText || '').trim();
+    if (!text) return '';
+
+    // Agar pehle se HTML tags likhe hain to direct save karein
+    if (/<(p|ul|ol|li|h[1-6]|br|div)\b[^>]*>/i.test(text)) {
+        return text;
+    }
+
+    const lines = text.split(/\r?\n/);
+    let htmlOutput = '';
+    let inBulletList = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        // Khaali line = Paragraph gap
+        if (!line) {
+            if (inBulletList) {
+                htmlOutput += '</ul>';
+                inBulletList = false;
+            }
+            continue;
+        }
+
+        // Bullet point check (-, *, •, ya 1.)
+        const bulletMatch = line.match(/^([-*•]|\d+\.)\s+(.*)$/);
+        if (bulletMatch) {
+            if (!inBulletList) {
+                htmlOutput += '<ul style="margin:8px 0 12px 20px; padding:0; line-height:1.7;">';
+                inBulletList = true;
+            }
+            htmlOutput += `<li style="margin-bottom:5px;">${bulletMatch[2]}</li>`;
+        } else {
+            if (inBulletList) {
+                htmlOutput += '</ul>';
+                inBulletList = false;
+            }
+            // Agar line ke ant mein ':' hai to Bold Sub-heading banayein
+            if (line.endsWith(':') && line.length < 85) {
+                htmlOutput += `<h4 style="margin:14px 0 6px 0; color:#d84315; font-size:15px;">${line}</h4>`;
+            } else {
+                htmlOutput += `<p style="margin:0 0 10px 0; line-height:1.7;">${line}</p>`;
+            }
+        }
+    }
+
+    if (inBulletList) {
+        htmlOutput += '</ul>';
+    }
+
+    return htmlOutput;
+}
+
+function htmlToEditableText(htmlStr) {
+    if (!htmlStr) return '';
+    return htmlStr
+        .replace(/<li[^>]*>/gi, '• ')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/<\/(p|h[1-6]|div|ul|ol)>/gi, '\n\n')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
 async function loadAdminYatrasList() {
     const listBox = document.getElementById('adminYatrasList');
     if (!listBox) return;
@@ -444,10 +531,6 @@ async function loadAdminYatrasList() {
     `).join('');
 }
 
-function stripHtmlTags(str) {
-    return (str || '').replace(/<\/?[^>]+(>|$)/g, '').trim();
-}
-
 function editYatraInAdmin(yatraId) {
     const y = (window.adminCachedYatras || []).find(item => item.id === yatraId);
     if (!y) return;
@@ -466,9 +549,9 @@ function editYatraInAdmin(yatraId) {
     document.getElementById('newYatraSubRoutes').value = Array.isArray(y.sub_routes) ? y.sub_routes.join(', ') : '';
     document.getElementById('newYatraLat').value = y.center_lat || '';
     document.getElementById('newYatraLng').value = y.center_lng || '';
-    document.getElementById('newYatraAbout').value = stripHtmlTags(y.about_html);
-    document.getElementById('newYatraInfo').value = stripHtmlTags(y.information_html);
-    document.getElementById('newYatraNiyam').value = stripHtmlTags(y.niyam_html);
+    document.getElementById('newYatraAbout').value = htmlToEditableText(y.about_html);
+    document.getElementById('newYatraInfo').value = htmlToEditableText(y.information_html);
+    document.getElementById('newYatraNiyam').value = htmlToEditableText(y.niyam_html);
 }
 
 function resetYatraCreatorForm() {
@@ -496,9 +579,9 @@ async function saveYatraForm() {
         sub_routes: subs,
         center_lat: parseFloat(document.getElementById('newYatraLat').value),
         center_lng: parseFloat(document.getElementById('newYatraLng').value),
-        about_html: `<p>${document.getElementById('newYatraAbout').value}</p>`,
-        information_html: `<p>${document.getElementById('newYatraInfo').value}</p>`,
-        niyam_html: `<p>${document.getElementById('newYatraNiyam').value}</p>`
+        about_html: formatTextToCleanHtml(document.getElementById('newYatraAbout').value),
+        information_html: formatTextToCleanHtml(document.getElementById('newYatraInfo').value),
+        niyam_html: formatTextToCleanHtml(document.getElementById('newYatraNiyam').value)
     };
 
     if (!payload.slug || !payload.name || isNaN(payload.center_lat) || isNaN(payload.center_lng)) {
