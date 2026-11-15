@@ -60,9 +60,47 @@ function isUserAdminOrMod() {
     return window.currentProfile && (window.currentProfile.role === 'super_admin' || window.currentProfile.role === 'moderator');
 }
 
+/// =========================================================
+// READ MORE MODAL: FORMATTED PARAGRAPHS, HEADINGS & BULLETS
 // =========================================================
-// READ MORE MODAL: SIRF US STHAN KI DETAILS DIKHANE KE LIYE
-// =========================================================
+function formatPadavDescriptionHtml(rawText) {
+    if (typeof formatTextToCleanHtml === 'function') {
+        return formatTextToCleanHtml(rawText);
+    }
+    const text = (rawText || '').trim();
+    if (!text) return '';
+    if (/<(p|ul|ol|li|h[1-6]|br|div)\b[^>]*>/i.test(text)) return text;
+
+    const lines = text.split(/\r?\n/);
+    let htmlOutput = '';
+    let inBulletList = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) {
+            if (inBulletList) { htmlOutput += '</ul>'; inBulletList = false; }
+            continue;
+        }
+        const bulletMatch = line.match(/^([-*•]|\d+\.)\s+(.*)$/);
+        if (bulletMatch) {
+            if (!inBulletList) {
+                htmlOutput += '<ul style="margin:8px 0 12px 20px; padding:0; line-height:1.7;">';
+                inBulletList = true;
+            }
+            htmlOutput += `<li style="margin-bottom:5px;">${bulletMatch[2]}</li>`;
+        } else {
+            if (inBulletList) { htmlOutput += '</ul>'; inBulletList = false; }
+            if (line.endsWith(':') && line.length < 85) {
+                htmlOutput += `<h4 style="margin:12px 0 5px 0; color:#d84315; font-size:15px;">${line}</h4>`;
+            } else {
+                htmlOutput += `<p style="margin:0 0 10px 0; line-height:1.7;">${line}</p>`;
+            }
+        }
+    }
+    if (inBulletList) htmlOutput += '</ul>';
+    return htmlOutput;
+}
+
 function openPadavDetailsModal(padavId) {
     const p = (window.activeYatraPadavs || []).find(item => item.id === padavId);
     if (!p) return;
@@ -70,7 +108,11 @@ function openPadavDetailsModal(padavId) {
     const titleEl = document.getElementById('detailPadavTitle');
     const bodyEl = document.getElementById('detailPadavBody');
     if (titleEl) titleEl.innerText = p.name;
-    if (bodyEl) bodyEl.innerText = p.description || 'कोई अतिरिक्त विवरण उपलब्ध नहीं है।';
+    if (bodyEl) {
+        bodyEl.innerHTML = p.description
+            ? formatPadavDescriptionHtml(p.description)
+            : '<p style="color:#666;">कोई अतिरिक्त विवरण उपलब्ध नहीं है।</p>';
+    }
 
     showModal('padavDetailModal');
 }
@@ -351,10 +393,11 @@ function renderIsolatedPadavs(list) {
         // 1-LINE DESCRIPTION + "READ MORE" BUTTON
         let descriptionPreviewHtml = '';
         if (p.description && p.description.trim().length > 0) {
+            const cleanOneLine = p.description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
             descriptionPreviewHtml = `
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; background:#fff8e1; border-left:3px solid #ff9800; padding:4px 7px; border-radius:4px; margin:5px 0;">
                     <span style="font-size:12px; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">
-                        ${p.description.trim()}
+                        ${cleanOneLine}
                     </span>
                     <button type="button" onclick="openPadavDetailsModal('${p.id}')" style="background:none; border:none; color:#d84315; font-size:11px; font-weight:bold; text-decoration:underline; cursor:pointer; white-space:nowrap; padding:0;">
                         Read more
