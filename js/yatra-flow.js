@@ -1,5 +1,22 @@
 window.yatraPadavsForSelection = [];
 
+function updateYatraSeoMeta(yatra) {
+    if (!yatra) return;
+    const displayName = window.currentLang === 'hi' ? (yatra.name_hi || yatra.name) : yatra.name;
+    document.title = `${displayName} Route Map, Ashram & Niyam - Parikramapath`;
+
+    let metaDesc = document.querySelector('meta[name="description"]');
+    if (!metaDesc) {
+        metaDesc = document.createElement('meta');
+        metaDesc.setAttribute('name', 'description');
+        document.head.appendChild(metaDesc);
+    }
+    metaDesc.setAttribute(
+        'content',
+        `${displayName} (${yatra.state}) ka live route map, ${yatra.total_distance_km || 0} km padav list, free bhojan, ashram aur parikrama niyam dekhein.`
+    );
+}
+
 async function loadAllYatras() {
     document.getElementById('lblBrandTitle').innerText = t('brandTitle');
     document.getElementById('lblBrandSub').innerText = t('brandSub');
@@ -13,8 +30,9 @@ async function loadAllYatras() {
         renderYatraCards(window.allYatras);
         if (typeof populateSevadarYatraDropdown === 'function') populateSevadarYatraDropdown(window.allYatras);
 
-        // Check direct SEO URL link (?yatra=narmada-parikrama)
-        const directSlug = new URLSearchParams(window.location.search).get('yatra');
+        // Clean SEO URL (/yatra/girnar-parikrama) ya query param (?yatra=girnar-parikrama) dono support
+        const pathMatch = window.location.pathname.match(/^\/yatra\/([^\/]+)/);
+        const directSlug = (pathMatch && pathMatch[1]) || new URLSearchParams(window.location.search).get('yatra');
         if (directSlug) {
             const matched = window.allYatras.find(y => y.slug === directSlug);
             if (matched) openStartPointGate(matched.id);
@@ -39,11 +57,11 @@ function renderYatraCards(list) {
                 <div style="font-size:26px;">${y.icon_emoji}</div>
                 <h3 style="margin:5px 0; color:#222;">${displayName}</h3>
                 <span class="badge">${y.state}</span>
-                <p style="font-size:12px; color:#555; margin:8px 0;">${typeLabel} • ${y.total_distance_km} km</p>
+                <p style="font-size:12px; color:#555; margin:8px 0;">${typeLabel} • ${y.total_distance_km || 0} km</p>
             </div>
             <div style="display:flex; gap:8px; margin-top:10px; border-top:1px solid #eee; padding-top:8px;">
                 <button onclick="openStartPointGate('${y.id}')" style="flex:1; background:${y.theme_color}; color:white; border:none; padding:7px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">🚩 यात्रा शुरू करें</button>
-                <a href="yatra-guide.html?slug=${y.slug}" style="flex:1; text-align:center; background:#fff3e0; color:#d84315; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📖 नियम व जानकारी</a>
+                <a href="/yatra/${y.slug}" style="flex:1; text-align:center; background:#fff3e0; color:#d84315; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📖 नियम व जानकारी</a>
             </div>
         `;
         grid.appendChild(card);
@@ -65,6 +83,9 @@ async function openStartPointGate(yatraId) {
     window.activeYatra = yatra;
     window.selectedStartPadav = null;
 
+    // SEO Title & Meta Description Update
+    updateYatraSeoMeta(yatra);
+
     document.getElementById('yatraGate').style.display = 'none';
     document.getElementById('startPointGate').style.display = 'flex';
     document.getElementById('routeSummaryBox').style.display = 'none';
@@ -75,7 +96,7 @@ async function openStartPointGate(yatraId) {
 
     const displayName = window.currentLang === 'hi' ? (yatra.name_hi || yatra.name) : yatra.name;
     document.getElementById('spYatraTitle').innerText = `${yatra.icon_emoji} ${displayName}`;
-    document.getElementById('spYatraMeta').innerText = `${yatra.state} • ${yatra.total_distance_km} km`;
+    document.getElementById('spYatraMeta').innerText = `${yatra.state} • ${yatra.total_distance_km || 0} km`;
     document.getElementById('selectedYatraHeader').style.borderLeftColor = yatra.theme_color;
 
     const dropdown = document.getElementById('startPointDropdown');
@@ -181,6 +202,7 @@ function backToYatraGate() {
     document.getElementById('startPointGate').style.display = 'none';
     document.getElementById('mainAppContainer').style.display = 'none';
     document.getElementById('yatraGate').style.display = 'flex';
+    document.title = 'Parikramapath - भारत तीर्थ एवं परिक्रमा पोर्टल';
 }
 
 function openStartPointChanger() {
@@ -189,7 +211,7 @@ function openStartPointChanger() {
 }
 
 function openYatraSeoPage() {
-    if (window.activeYatra) window.open(`yatra-guide.html?slug=${window.activeYatra.slug}`, '_blank');
+    if (window.activeYatra) window.open(`/yatra/${window.activeYatra.slug}`, '_blank');
 }
 
 window.addEventListener('DOMContentLoaded', loadAllYatras);
