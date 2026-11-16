@@ -1,8 +1,17 @@
 // =========================================================
-// PARIKRAMAPATH - ADMIN, YATRA CRUD, FORMATTER, AARTI & PADAV
+// PARIKRAMAPATH - ADMIN, YATRA CRUD, FORMATTER, AARTI, PADAV & DONATION
 // =========================================================
 
 window.tempNextPadavs = [];
+window.donationSettingsCache = {
+    upi_id: 'parikramapath@upi',
+    payee_name: 'Parikramapath Seva',
+    bank_name: '',
+    account_holder: '',
+    account_number: '',
+    ifsc_code: ''
+};
+let donorPhotoBase64 = null;
 
 function getCleanUserRole() {
     if (!window.currentProfile || !window.currentProfile.role) return '';
@@ -364,6 +373,7 @@ async function submitNewPadav() {
             alert("✅ आपके बदलाव सुरक्षित कर लिए गए हैं। एडमिन की स्वीकृति (Approval) के बाद यह मैप पर दिखाई देगा।");
         }
     } else {
+        obj.created_by = window.currentUser.id;
         const { data, error } = await supabaseClient.from('padavs').insert([obj]).select().single();
         if (error) return alert("Insert Error: " + error.message);
 
@@ -379,7 +389,7 @@ async function submitNewPadav() {
 }
 
 // =========================================================
-// 2. ADMIN MODAL: PENDING PADAVS + YATRA CRUD + AARTI MANAGER
+// 2. ADMIN MODAL: PENDING PADAVS + YATRA CRUD + AARTI + DONATION
 // =========================================================
 async function openAdminModal() {
     showModal('adminModal');
@@ -388,16 +398,26 @@ async function openAdminModal() {
     if (creatorBox) {
         creatorBox.style.display = isSuperAdmin ? 'block' : 'none';
     }
-    document.getElementById('modYatraLabel').innerText = window.activeYatra ? window.activeYatra.name : '';
+    const donationAdminBox = document.getElementById('superAdminDonationManager');
+    if (donationAdminBox) {
+        donationAdminBox.style.display = isSuperAdmin ? 'block' : 'none';
+    }
+    document.getElementById('modYatraLabel').innerText = window.activeYatra ? window.activeYatra.name : 'सभी यात्राएं';
 
     if (isSuperAdmin) {
         resetYatraCreatorForm();
         await loadAdminYatrasList();
+        await loadAdminDonationManager();
     }
 
-    // Active Yatra ki Aartis load karein (Admin/Moderator ke liye)
-    if (isAdminUser() && typeof loadAdminAartis === 'function') {
+    if (isAdminUser() && window.activeYatra && typeof loadAdminAartis === 'function') {
         await loadAdminAartis();
+    }
+
+    const box = document.getElementById('pendingPadavsList');
+    if (!window.activeYatra) {
+        box.innerHTML = '<p style="color:#777; font-size:12px;">किसी यात्रा के मैप पर जाकर पेंडिंग पड़ाव देखें।</p>';
+        return;
     }
 
     const { data: pending } = await supabaseClient
@@ -406,7 +426,6 @@ async function openAdminModal() {
         .eq('yatra_id', window.activeYatra.id)
         .eq('status', 'pending');
 
-    const box = document.getElementById('pendingPadavsList');
     if (!pending || pending.length === 0) {
         box.innerHTML = '<p style="color:#777; font-size:13px;">कोई पेंडिंग पड़ाव नहीं है।</p>';
         return;
@@ -737,12 +756,272 @@ async function deleteYatraAarti(aartiId) {
     await loadAdminAartis();
 }
 
+// =========================================================
+// 5. DYNAMIC UPI QR DONATION, NEFT COPY & ADMIN DONOR WALL
+// =========================================================
+async function initDonationAndDonorWall() {
+    try {
+        const { data: settings } = await supabaseClient
+            .from('donation_settings')
+            .select('*')
+            .eq('id', 1)
+            .single();
+
+        if (settings) {
+            window.donationSettingsCache = settings;
+        }
+    } catch (e) {
+        console.warn("Donation settings fallback:", e);
+    }
+
+    renderDonationDetailsOnHome();
+    generateDynamicUpiQr(51);
+    await loadPublicDonorWall();
+}
+
+function renderDonationDetailsOnHome() {
+    const s = window.donationSettingsCache;
+    const upiDisp = document.getElementById('displayUpiIdText');
+    if (upiDisp) upiDisp.innerText = s.upi_id || 'parikramapath@upi';
+
+    const neftBox = document.getElementById('neftDetailsBox');
+    if (neftBox) {
+        if (s.account_number && s.ifsc_code) {
+            neftBox.style.display = 'block';
+            document.getElementById('dispBankName').innerText = s.bank_name || '-';
+            document.getElementById('dispAccHolder').innerText = s.account_holder || s.payee_name || '-';
+            document.getElementById('dispAccNo').innerText = s.account_number;
+            document.getElementById('dispIfsc').innerText = s.ifsc_code;
+        } else {
+            neftBox.style.display = 'none';
+        }
+    }
+}
+
+function setDonationAmount(amt) {
+    const input = document.getElementById('donationAmountInput');
+    if (input) input.value = amt;
+    generateDynamicUpiQr(amt);
+}
+
+function generateDynamicUpiQr(customAmt = null) {
+    const s = window.donationSettingsCache;
+    const input = document.getElementById('donationAmountInput');
+    const amount = customAmt !== null ? parseFloat(customAmt) : (input ? parseFloat(input.value) : 0);
+
+    const upiId = encodeURIComponent((s.upi_id || 'parikramapath@upi').trim());
+    const payee = encodeURIComponent((s.payee_name || 'Parikramapath Seva').trim());
+    const note = encodeURIComponent('Parikramapath Seva Sahyog');
+
+    let upiUri = `upi://pay?pa=${upiId}&pn=${payee}&tn=${note}&cu=INR`;
+    if (!isNaN(amount) && amount > 0) {
+        upiUri += `&am=${amount.toFixed(2)}`;
+    }
+
+    const qrContainer = document.getElementById('donationUpiQrBox');
+    if (qrContainer && typeof QRCode !== 'undefined') {
+        qrContainer.innerHTML = '';
+        new QRCode(qrContainer, {
+            text: upiUri,
+            width: 145,
+            height: 145,
+            colorDark: "#000000",
+            colorLight: "#ffffff",
+            correctLevel: QRCode.CorrectLevel.M
+        });
+    }
+
+    const payBtn = document.getElementById('directUpiPayLink');
+    if (payBtn) {
+        payBtn.href = upiUri;
+    }
+}
+
+function copyDonationField(type) {
+    const s = window.donationSettingsCache;
+    let textToCopy = '';
+    if (type === 'upi') textToCopy = s.upi_id;
+    if (type === 'acc') textToCopy = s.account_number;
+    if (type === 'ifsc') textToCopy = s.ifsc_code;
+    if (!textToCopy) return;
+
+    navigator.clipboard.writeText(textToCopy).then(() => {
+        alert(`📋 कॉपी हो गया: ${textToCopy}`);
+    }).catch(() => {
+        prompt("कृपया यहाँ से कॉपी करें:", textToCopy);
+    });
+}
+
+function handleDonorPhotoUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+            const canvas = document.createElement('canvas');
+            const size = 140;
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const minSide = Math.min(img.width, img.height);
+            const sx = (img.width - minSide) / 2;
+            const sy = (img.height - minSide) / 2;
+            ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
+            donorPhotoBase64 = canvas.toDataURL('image/jpeg', 0.75);
+        };
+        img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+}
+
+async function submitDonorWallEntry() {
+    const fullName = document.getElementById('donorNameInput').value.trim();
+    const city = document.getElementById('donorCityInput').value.trim();
+    const utrNo = document.getElementById('donorUtrInput').value.trim();
+    const amt = parseFloat(document.getElementById('donationAmountInput').value) || 0;
+
+    if (!fullName || !city || !utrNo) {
+        return alert("⚠️ कृपया अपना नाम, शहर और UPI/NEFT Transaction ID (UTR) अवश्य भरें।");
+    }
+
+    const { error } = await supabaseClient.from('donors').insert([{
+        full_name: fullName,
+        city: city,
+        amount: amt,
+        utr_no: utrNo,
+        photo_base64: donorPhotoBase64,
+        status: 'pending'
+    }]);
+
+    if (error) return alert("Error: " + error.message);
+
+    document.getElementById('donorNameInput').value = '';
+    document.getElementById('donorCityInput').value = '';
+    document.getElementById('donorUtrInput').value = '';
+    const fileInput = document.getElementById('donorPhotoInput');
+    if (fileInput) fileInput.value = '';
+    donorPhotoBase64 = null;
+
+    alert("🙏 धन्यवाद! आपका विवरण प्राप्त हो गया है। एडमिन सत्यापन के बाद आपका नाम व फोटो 'हमारे सहयोगी' सूची में जुड़ जाएगा।");
+}
+
+async function loadPublicDonorWall() {
+    const wallBox = document.getElementById('publicDonorWallGrid');
+    if (!wallBox) return;
+
+    const { data: donors } = await supabaseClient
+        .from('donors')
+        .select('id, full_name, city, photo_base64, created_at')
+        .eq('status', 'approved')
+        .order('created_at', { ascending: false });
+
+    if (!donors || donors.length === 0) {
+        wallBox.innerHTML = '<small style="color:#777;">प्रथम सहयोगी बनकर परिक्रमापथ सेवा में सहभागी बनें।</small>';
+        return;
+    }
+
+    wallBox.innerHTML = donors.map(d => {
+        const avatar = d.photo_base64 || 'https://cdn-icons-png.flaticon.com/512/149/149071.png';
+        return `
+            <div style="background:white; border:1px solid #ffe082; border-radius:10px; padding:8px 10px; display:flex; align-items:center; gap:8px; box-shadow:0 2px 5px rgba(0,0,0,0.05);">
+                <img src="${avatar}" alt="${d.full_name}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid #ff9800;">
+                <div style="text-align:left; line-height:1.3;">
+                    <div style="font-weight:bold; font-size:12.5px; color:#222;">${d.full_name}</div>
+                    <div style="font-size:11px; color:#666;">📍 ${d.city}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// ADMIN DONATION SETTINGS & DONOR APPROVALS
+async function loadAdminDonationManager() {
+    const s = window.donationSettingsCache;
+    if (document.getElementById('adminUpiIdInput')) {
+        document.getElementById('adminUpiIdInput').value = s.upi_id || '';
+        document.getElementById('adminPayeeNameInput').value = s.payee_name || '';
+        document.getElementById('adminBankNameInput').value = s.bank_name || '';
+        document.getElementById('adminAccHolderInput').value = s.account_holder || '';
+        document.getElementById('adminAccNoInput').value = s.account_number || '';
+        document.getElementById('adminIfscInput').value = s.ifsc_code || '';
+    }
+
+    const listBox = document.getElementById('adminDonorsApprovalList');
+    if (!listBox) return;
+
+    const { data: allDonors } = await supabaseClient
+        .from('donors')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+    if (!allDonors || allDonors.length === 0) {
+        listBox.innerHTML = '<small style="color:#777;">अभी कोई दानदाता प्रविष्टि नहीं है।</small>';
+        return;
+    }
+
+    listBox.innerHTML = allDonors.map(d => `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:white; padding:6px 8px; border-radius:5px; margin-bottom:5px; border:1px solid ${d.status === 'approved' ? '#c8e6c9' : '#ffe082'}; font-size:12px;">
+            <div>
+                <b>${d.full_name}</b> (${d.city}) — <span style="color:#2e7d32; font-weight:bold;">₹${d.amount || 0}</span><br>
+                <small style="color:#555;">UTR: <b>${d.utr_no}</b> • Status: <b>${d.status.toUpperCase()}</b></small>
+            </div>
+            <div style="display:flex; gap:4px;">
+                ${d.status !== 'approved' ? `<button type="button" onclick="approveDonorEntry('${d.id}')" style="background:#2e7d32; color:white; border:none; padding:4px 7px; border-radius:4px; cursor:pointer;">✔ Approve</button>` : ''}
+                <button type="button" onclick="deleteDonorEntry('${d.id}')" style="background:#dc3545; color:white; border:none; padding:4px 7px; border-radius:4px; cursor:pointer;">🗑️ Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function saveAdminDonationSettings() {
+    if (!isSuperAdminUser()) return;
+
+    const payload = {
+        id: 1,
+        upi_id: document.getElementById('adminUpiIdInput').value.trim(),
+        payee_name: document.getElementById('adminPayeeNameInput').value.trim() || 'Parikramapath Seva',
+        bank_name: document.getElementById('adminBankNameInput').value.trim(),
+        account_holder: document.getElementById('adminAccHolderInput').value.trim(),
+        account_number: document.getElementById('adminAccNoInput').value.trim(),
+        ifsc_code: document.getElementById('adminIfscInput').value.trim().toUpperCase(),
+        updated_at: new Date().toISOString()
+    };
+
+    if (!payload.upi_id) return alert("⚠️ कृपया UPI ID अवश्य डालें।");
+
+    const { error } = await supabaseClient.from('donation_settings').upsert(payload);
+    if (error) return alert("Save Error: " + error.message);
+
+    window.donationSettingsCache = payload;
+    renderDonationDetailsOnHome();
+    generateDynamicUpiQr();
+    alert("✅ UPI और बैंक विवरण सुरक्षित हो गए हैं!");
+}
+
+async function approveDonorEntry(donorId) {
+    const { error } = await supabaseClient.from('donors').update({ status: 'approved' }).eq('id', donorId);
+    if (error) return alert("Error: " + error.message);
+    await loadAdminDonationManager();
+    await loadPublicDonorWall();
+}
+
+async function deleteDonorEntry(donorId) {
+    if (!confirm("क्या आप इस दानदाता प्रविष्टि को हटाना चाहते हैं?")) return;
+    const { error } = await supabaseClient.from('donors').delete().eq('id', donorId);
+    if (error) return alert("Error: " + error.message);
+    await loadAdminDonationManager();
+    await loadPublicDonorWall();
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     setTimeout(syncOfflineAartis, 2500);
+    setTimeout(initDonationAndDonorWall, 600);
 });
 
 // =========================================================
-// 5. MODAL & MENU HELPERS
+// 6. MODAL & MENU HELPERS
 // =========================================================
 function showModal(id) {
     closeAllModals();

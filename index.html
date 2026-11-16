@@ -65,6 +65,63 @@
             <p style="text-align:center; color:#777;">यात्राएं लोड हो रही हैं...</p>
         </div>
 
+        <!-- DYNAMIC UPI QR DONATION, NEFT & PUBLIC DONOR WALL -->
+        <section style="margin-top:24px; padding:16px; background:linear-gradient(135deg, #fffdf7, #fff3e0); border:2px solid #ffb74d; border-radius:12px; text-align:left;">
+            <h2 style="font-size:18px; color:#d84315; margin:0 0 6px 0; text-align:center;">🙏 परिक्रमापथ सेवा सहयोग (Support & Donate)</h2>
+            <p style="font-size:12.5px; color:#555; text-align:center; margin:0 0 12px 0;">
+                परिक्रमापथ को सभी तीर्थयात्रियों के लिए निःशुल्क एवं विज्ञापन-मुक्त बनाए रखने में अपना स्वेच्छा सहयोग दें।
+            </p>
+
+            <div style="display:flex; flex-wrap:wrap; gap:14px; justify-content:center; align-items:flex-start; background:white; padding:12px; border-radius:10px; border:1px solid #ffe082;">
+                <!-- QR & UPI Box -->
+                <div style="text-align:center; flex:1; min-width:210px;">
+                    <div style="display:flex; justify-content:center; gap:5px; margin-bottom:8px;">
+                        <button type="button" onclick="setDonationAmount(51)" style="background:#fff3e0; border:1px solid #ff9800; color:#d84315; padding:4px 9px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">₹51</button>
+                        <button type="button" onclick="setDonationAmount(101)" style="background:#fff3e0; border:1px solid #ff9800; color:#d84315; padding:4px 9px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">₹101</button>
+                        <button type="button" onclick="setDonationAmount(251)" style="background:#fff3e0; border:1px solid #ff9800; color:#d84315; padding:4px 9px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">₹251</button>
+                        <button type="button" onclick="setDonationAmount(501)" style="background:#fff3e0; border:1px solid #ff9800; color:#d84315; padding:4px 9px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">₹501</button>
+                    </div>
+                    <input type="number" id="donationAmountInput" value="51" oninput="generateDynamicUpiQr(this.value)" placeholder="राशि ₹ में डालें" class="form-input" style="text-align:center; font-weight:bold; margin-bottom:8px;">
+                    <div id="donationUpiQrBox" style="display:inline-block; padding:8px; background:white; border:2px solid #ff9800; border-radius:8px; margin-bottom:6px;"></div>
+                    <div style="font-size:12px; margin-bottom:6px;">
+                        UPI ID: <b id="displayUpiIdText" style="color:#2e7d32;">parikramapath@upi</b>
+                        <button type="button" onclick="copyDonationField('upi')" style="background:#eee; border:1px solid #ccc; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer;">📋 Copy</button>
+                    </div>
+                    <a id="directUpiPayLink" href="#" style="display:inline-block; background:#2e7d32; color:white; text-decoration:none; padding:7px 14px; border-radius:6px; font-size:12.5px; font-weight:bold;">📱 UPI App से पेमेंट करें</a>
+
+                    <!-- NEFT / Bank Details -->
+                    <div id="neftDetailsBox" style="display:none; margin-top:10px; padding:8px; background:#f5f5f5; border-radius:6px; font-size:11.5px; text-align:left; border:1px solid #ddd;">
+                        <b>🏦 NEFT / Bank Transfer:</b><br>
+                        Bank: <span id="dispBankName">-</span><br>
+                        Name: <span id="dispAccHolder">-</span><br>
+                        A/c No: <b id="dispAccNo">-</b> <button type="button" onclick="copyDonationField('acc')" style="font-size:10px; cursor:pointer;">📋 Copy</button><br>
+                        IFSC: <b id="dispIfsc">-</b> <button type="button" onclick="copyDonationField('ifsc')" style="font-size:10px; cursor:pointer;">📋 Copy</button>
+                    </div>
+                </div>
+
+                <!-- Donor Wall Submission Form -->
+                <div style="flex:1; min-width:220px; background:#f9fbe7; padding:10px; border-radius:8px; border:1px solid #c5e1a5;">
+                    <div style="font-weight:bold; font-size:13px; color:#33691e; margin-bottom:6px;">🌟 सहयोगी सूची (Donor Wall) में नाम जोड़ें:</div>
+                    <input type="text" id="donorNameInput" placeholder="आपका शुभ नाम *" class="form-input" style="font-size:12px; margin-bottom:6px;">
+                    <input type="text" id="donorCityInput" placeholder="शहर / गाँव का नाम *" class="form-input" style="font-size:12px; margin-bottom:6px;">
+                    <input type="text" id="donorUtrInput" placeholder="UPI Ref / UTR नंबर *" class="form-input" style="font-size:12px; margin-bottom:6px;">
+                    <label style="font-size:11px; color:#555; display:block; margin-bottom:6px;">
+                        📷 आपकी फोटो (वैकल्पिक): <input type="file" id="donorPhotoInput" accept="image/*" onchange="handleDonorPhotoUpload(event)" style="font-size:11px;">
+                    </label>
+                    <button type="button" onclick="submitDonorWallEntry()" style="width:100%; background:#ff5722; color:white; border:none; padding:8px; border-radius:6px; font-weight:bold; font-size:12.5px; cursor:pointer;">✅ विवरण सबमिट करें</button>
+                    <small style="display:block; color:#666; font-size:10.5px; margin-top:4px;">* सुरक्षा हेतु पब्लिक सूची में दान राशि नहीं दिखाई जाती।</small>
+                </div>
+            </div>
+
+            <!-- PUBLIC APPROVED DONOR WALL -->
+            <div style="margin-top:14px;">
+                <div style="font-weight:bold; font-size:13.5px; color:#e65100; margin-bottom:8px;">💛 हमारे सम्माननीय सहयोगी (Our Supporters):</div>
+                <div id="publicDonorWallGrid" style="display:flex; flex-wrap:wrap; gap:8px;">
+                    <small style="color:#777;">सहयोगी सूची लोड हो रही है...</small>
+                </div>
+            </div>
+        </section>
+
         <!-- STATIC SEO CONTENT & FAQ SECTION FOR GOOGLE INDEXING & PILGRIMS -->
         <section style="margin-top:24px; padding-top:18px; border-top:1px solid #eee; text-align:left; font-size:13px; color:#444; line-height:1.65;">
             <h2 style="font-size:17px; color:#d84315; margin:0 0 8px 0;">🚩 परिक्रमापथ (Parikramapath) क्या है?</h2>
@@ -495,6 +552,23 @@
         <button type="button" onclick="addYatraAarti()" class="primary-btn" style="background:#ad1457;">💾 आरती सेव करें</button>
         <div id="adminAartiList" style="margin-top:10px; max-height:150px; overflow-y:auto;"></div>
     </div>
+
+    <!-- SUPER ADMIN DONATION & DONOR WALL MANAGER -->
+    <div id="superAdminDonationManager" style="display:none; background:#fff3e0; padding:12px; border-radius:8px; border:1px solid #ffb74d; margin-top:15px;">
+        <h4 style="margin:0 0 8px 0; color:#e65100;">🙏 Donation UPI / Bank & Donor Wall (Super Admin)</h4>
+        <input type="text" id="adminUpiIdInput" placeholder="UPI ID (e.g. yourname@okicici) *" class="form-input">
+        <input type="text" id="adminPayeeNameInput" placeholder="Payee Name (e.g. Parikramapath Seva)" class="form-input">
+        <input type="text" id="adminBankNameInput" placeholder="Bank Name (NEFT ke liye - Optional)" class="form-input">
+        <input type="text" id="adminAccHolderInput" placeholder="Account Holder Name" class="form-input">
+        <div style="display:flex; gap:5px;">
+            <input type="text" id="adminAccNoInput" placeholder="Account Number" class="form-input">
+            <input type="text" id="adminIfscInput" placeholder="IFSC Code" class="form-input">
+        </div>
+        <button type="button" onclick="saveAdminDonationSettings()" class="primary-btn" style="background:#e65100; margin-bottom:10px;">💾 UPI व बैंक विवरण सेव करें</button>
+
+        <h5 style="margin:8px 0 6px 0; color:#333;">🌟 Donor Wall Approvals (Approve / Delete):</h5>
+        <div id="adminDonorsApprovalList" style="max-height:180px; overflow-y:auto;"></div>
+    </div>
 </div>
 
 <!-- AARTI MODAL -->
@@ -505,11 +579,11 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=11"></script>
-<script src="js/yatra-flow.js?v=11"></script>
-<script src="js/map.js?v=11"></script>
-<script src="js/auth-sos.js?v=11"></script>
-<script src="js/admin.js?v=11"></script>
+<script src="js/config.js?v=12"></script>
+<script src="js/yatra-flow.js?v=12"></script>
+<script src="js/map.js?v=12"></script>
+<script src="js/auth-sos.js?v=12"></script>
+<script src="js/admin.js?v=12"></script>
 
 <!-- PWA INSTALL & SERVICE WORKER CONTROLLER -->
 <script>

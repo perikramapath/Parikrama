@@ -27,7 +27,9 @@ body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; backgr
 .pill-btn, .pill-select {
     padding: 8px 12px; border-radius: 20px; border: 2px solid white;
     font-size: 12px; font-weight: bold; cursor: pointer; box-shadow: 0 3px 8px rgba(0,0,0,0.25);
+    transition: transform 0.12s, opacity 0.15s;
 }
+.pill-btn:active { transform: scale(0.97); }
 .pill-select { background: white; color: #333; border-color: #333; }
 
 .sos-float-btn {
@@ -60,4 +62,24 @@ body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; backgr
 }
 .form-input { width: 100%; padding: 9px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 13px; }
 .primary-btn { width: 100%; padding: 11px; background: #ff5722; color: white; border: none; border-radius: 6px; font-size: 14px; font-weight: bold; cursor: pointer; }
+.primary-btn:hover { opacity: 0.93; }
 .sos-opt-btn { width: 100%; padding: 12px; margin-bottom: 10px; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; }
+
+/* Donation QR & Donor Wall Styling */
+#donationUpiQrBox img, #donationUpiQrBox canvas {
+    display: block;
+    margin: 0 auto;
+}
+#publicDonorWallGrid > div {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+#publicDonorWallGrid > div:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(255, 152, 0, 0.2);
+}
+
+@media (max-width: 520px) {
+    .gate-box { padding: 15px; }
+    .top-bar { right: 82px; gap: 4px; }
+    .pill-btn, .pill-select { padding: 6px 9px; font-size: 11px; }
+}
