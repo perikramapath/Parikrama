@@ -394,6 +394,10 @@
             <option value="Medical">🏥 मेडिकल</option>
             <option value="Point">📍 मार्ग बिंदु (Point)</option>
         </select>
+
+        <button id="toggleHideVisitedMapBtn" onclick="ParikramaVisited.toggleHideVisited()" class="pill-btn" style="background:#37474f; color:white;">
+            👁️ पूर्ण दिखाएं
+        </button>
     </div>
 
     <button onclick="openSOSModal()" class="sos-float-btn">🚨 SOS</button>
@@ -766,6 +770,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/config.js?v=13"></script>
 <script src="js/yatra-flow.js?v=13"></script>
+<script src="js/visited-local.js?v=1"></script>
 <script src="js/map.js?v=13"></script>
 <script src="js/auth-sos.js?v=13"></script>
 <script src="js/admin.js?v=13"></script>

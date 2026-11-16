@@ -22,6 +22,18 @@
         .padav-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 14px; }
         .padav-table th, .padav-table td { border: 1px solid #ddd; padding: 10px; text-align: left; vertical-align: top; }
         .padav-table th { background: #fff3e0; }
+
+        /* Visited Padav Progress & Checklist Styles */
+        .progress-card { background: #fff8e1; border: 1px solid #ffe082; border-radius: 12px; padding: 14px 16px; margin-top: 12px; }
+        .progress-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+        .progress-stats { font-size: 14px; font-weight: bold; color: #bf360c; }
+        .progress-track { width: 100%; height: 10px; background: #ffe0b2; border-radius: 999px; overflow: hidden; }
+        .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #ff6f00, #2e7d32); transition: width 0.3s ease; }
+        .hide-toggle-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: bold; color: #333; background: #fff; padding: 5px 10px; border-radius: 20px; border: 1px solid #ffcc80; cursor: pointer; user-select: none; }
+        .visited-checkbox { width: 18px; height: 18px; accent-color: #2e7d32; cursor: pointer; }
+        tr.padav-visited { background-color: #e8f5e9 !important; }
+        tr.padav-visited td b { color: #1b5e20; text-decoration: line-through; }
+
         @media (max-width: 600px) {
             .guide-container { padding: 15px; margin: 10px; }
             .padav-table th, .padav-table td { padding: 7px; font-size: 12px; }
@@ -68,9 +80,30 @@
 
     <section id="padav-list" class="guide-section">
         <h2>🛌 प्रमुख पड़ाव एवं आश्रम सूची</h2>
+
+        <!-- 100% LocalStorage Visited Padav Progress Bar -->
+        <div class="progress-card">
+            <div class="progress-header">
+                <div class="progress-stats">
+                    ✅ यात्रा प्रगति: <span id="visitedCountText">0 / 0 पड़ाव</span>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <label class="hide-toggle-label">
+                        <input type="checkbox" id="hideVisitedToggle" onchange="toggleHideVisitedRows(this.checked)">
+                        पूर्ण पड़ाव छिपाएँ
+                    </label>
+                    <button type="button" onclick="resetVisitedPadavs()" style="background:none; border:1px solid #ddd; color:#666; padding:4px 9px; border-radius:15px; font-size:12px; cursor:pointer;">रीसेट</button>
+                </div>
+            </div>
+            <div class="progress-track">
+                <div id="yatraProgressFill" class="progress-fill"></div>
+            </div>
+        </div>
+
         <table class="padav-table">
             <thead>
                 <tr>
+                    <th style="width:65px; text-align:center;">Visited</th>
                     <th>पड़ाव / स्थान एवं विवरण</th>
                     <th>मार्ग</th>
                     <th>भोजन</th>
@@ -78,7 +111,7 @@
                 </tr>
             </thead>
             <tbody id="seoPadavTableBody">
-                <tr><td colspan="4" style="text-align:center; color:#777;">पड़ाव लोड हो रहे हैं...</td></tr>
+                <tr><td colspan="5" style="text-align:center; color:#777;">पड़ाव लोड हो रहे हैं...</td></tr>
             </tbody>
         </table>
     </section>
@@ -92,6 +125,96 @@
 <script src="/js/config.js?v=5"></script>
 <script>
     let loadedYatra = null;
+    let allLoadedPadavs = [];
+
+    function getStorageKey() {
+        const slug = loadedYatra ? loadedYatra.slug : 'default';
+        return `parikrama_visited_${slug}`;
+    }
+
+    function getVisitedList() {
+        try {
+            return JSON.parse(localStorage.getItem(getStorageKey()) || '[]');
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function saveVisitedList(list) {
+        localStorage.setItem(getStorageKey(), JSON.stringify(list));
+    }
+
+    function togglePadavVisited(padavId) {
+        const idStr = String(padavId);
+        let visited = getVisitedList();
+        if (visited.includes(idStr)) {
+            visited = visited.filter(id => id !== idStr);
+        } else {
+            visited.push(idStr);
+        }
+        saveVisitedList(visited);
+        renderPadavTable();
+    }
+
+    function toggleHideVisitedRows(hide) {
+        localStorage.setItem('parikrama_hide_visited_rows', hide ? '1' : '0');
+        renderPadavTable();
+    }
+
+    function resetVisitedPadavs() {
+        if (confirm('क्या आप इस यात्रा की सेव की गई चेकलिस्ट रीसेट करना चाहते हैं?')) {
+            localStorage.removeItem(getStorageKey());
+            renderPadavTable();
+        }
+    }
+
+    function renderPadavTable() {
+        const tbody = document.getElementById('seoPadavTableBody');
+        const visited = getVisitedList();
+        const hideVisited = document.getElementById('hideVisitedToggle')?.checked || false;
+
+        const total = allLoadedPadavs.length;
+        const completed = allLoadedPadavs.filter(p => visited.includes(String(p.id))).length;
+        const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        document.getElementById('visitedCountText').innerText = `${completed} / ${total} पड़ाव (${percent}%)`;
+        document.getElementById('yatraProgressFill').style.width = `${percent}%`;
+
+        if (total === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#777;">पड़ाव सूची जल्द जोड़ी जाएगी।</td></tr>';
+            return;
+        }
+
+        const rowsToShow = hideVisited
+            ? allLoadedPadavs.filter(p => !visited.includes(String(p.id)))
+            : allLoadedPadavs;
+
+        if (rowsToShow.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#2e7d32; font-weight:bold;">🎉 बधाई हो! आपने सभी पड़ाव पूरे कर लिए हैं।</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rowsToShow.map(p => {
+            const isVisited = visited.includes(String(p.id));
+            const descSnippet = p.description
+                ? `<div style="font-size:12px; color:#555; margin-top:4px; line-height:1.5;">${p.description}</div>`
+                : '';
+            return `
+                <tr class="${isVisited ? 'padav-visited' : ''}">
+                    <td style="text-align:center; vertical-align:middle;">
+                        <input type="checkbox" class="visited-checkbox" ${isVisited ? 'checked' : ''} onchange="togglePadavVisited('${p.id}')" title="Visited मार्क करें">
+                    </td>
+                    <td>
+                        <b>${p.name}</b>
+                        ${descSnippet}
+                    </td>
+                    <td>${p.sub_route || '-'}</td>
+                    <td>${p.category === 'Point' ? 'मार्ग बिंदु' : (p.bhojan_type || '-')}</td>
+                    <td>${p.category === 'Point' ? 'केवल दर्शन/विश्राम' : (p.niwas_type || '-')}</td>
+                </tr>
+            `;
+        }).join('');
+    }
 
     async function loadYatraGuidePage() {
         // 1. Clean URL (/yatra/girnar-parikrama) ya Query Param (?slug=girnar-parikrama) dono se slug nikalen
@@ -102,6 +225,10 @@
             window.location.href = '/';
             return;
         }
+
+        const hidePref = localStorage.getItem('parikrama_hide_visited_rows') === '1';
+        const hideCheckbox = document.getElementById('hideVisitedToggle');
+        if (hideCheckbox) hideCheckbox.checked = hidePref;
 
         const { data: yatra, error } = await supabaseClient
             .from('yatras')
@@ -146,35 +273,16 @@
             }
         });
 
-        // Padav List + Descriptions for Google SEO Crawling
+        // Padav List + ID (for LocalStorage tracking) + Descriptions
         const { data: padavs } = await supabaseClient
             .from('padavs')
-            .select('name, sub_route, category, description, bhojan_type, niwas_type')
+            .select('id, name, sub_route, category, description, bhojan_type, niwas_type')
             .eq('yatra_id', yatra.id)
             .eq('status', 'approved')
             .order('sequence_no', { ascending: true });
 
-        const tbody = document.getElementById('seoPadavTableBody');
-        if (padavs && padavs.length > 0) {
-            tbody.innerHTML = padavs.map(p => {
-                const descSnippet = p.description
-                    ? `<div style="font-size:12px; color:#555; margin-top:4px; line-height:1.5;">${p.description}</div>`
-                    : '';
-                return `
-                    <tr>
-                        <td>
-                            <b>${p.name}</b>
-                            ${descSnippet}
-                        </td>
-                        <td>${p.sub_route || '-'}</td>
-                        <td>${p.category === 'Point' ? 'मार्ग बिंदु' : (p.bhojan_type || '-')}</td>
-                        <td>${p.category === 'Point' ? 'केवल दर्शन/विश्राम' : (p.niwas_type || '-')}</td>
-                    </tr>
-                `;
-            }).join('');
-        } else {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#777;">पड़ाव सूची जल्द जोड़ी जाएगी।</td></tr>';
-        }
+        allLoadedPadavs = padavs || [];
+        renderPadavTable();
     }
 
     function launchThisYatraMap() {

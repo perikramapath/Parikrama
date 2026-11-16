@@ -438,6 +438,7 @@ function renderIsolatedPadavs(list) {
     if (!window.padavLayer || !Array.isArray(list)) return;
     window.padavLayer.clearLayers();
     window.padavMarkersMap = {};
+    if (window.ParikramaVisited) window.ParikramaVisited.clearRegistry();
 
     const adminMode = isUserAdminOrMod();
     const isLoggedInUser = !!window.currentUser;
@@ -600,6 +601,10 @@ function renderIsolatedPadavs(list) {
             `;
         }
 
+        const visitedBtnHtml = window.ParikramaVisited
+            ? window.ParikramaVisited.getActionButtonHtml(p.id)
+            : '';
+
         const popupHtml = `
             <div style="min-width:225px; max-width:265px; font-family:sans-serif;">
                 ${startTag}
@@ -610,15 +615,22 @@ function renderIsolatedPadavs(list) {
                 ${facilitySectionHtml}
                 ${p.contact_no ? `<p style="margin:4px 0; font-size:12px;"><b>📞 संपर्क:</b> ${p.contact_person || ''} (<a href="tel:${p.contact_no}">${p.contact_no}</a>)</p>` : ''}
                 ${nextOptionsHtml}
+                ${visitedBtnHtml}
                 <a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" style="display:block; text-align:center; background:#1976d2; color:white; padding:6px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold; margin-top:8px;">🧭 Google Maps से दिशा देखें</a>
                 ${actionBtnsHtml}
             </div>
         `;
 
-        const marker = L.marker([p.lat, p.lng], { icon }).bindPopup(popupHtml).addTo(window.padavLayer);
+        const marker = L.marker([p.lat, p.lng], { icon }).bindPopup(popupHtml);
         window.padavMarkersMap[p.id] = marker;
 
-        if (isStart) marker.openPopup();
+        if (window.ParikramaVisited) {
+            window.ParikramaVisited.attachToMarker(window.padavLayer, marker, p);
+        } else {
+            marker.addTo(window.padavLayer);
+        }
+
+        if (isStart && window.padavLayer.hasLayer(marker)) marker.openPopup();
     });
 }
 
@@ -627,7 +639,12 @@ function focusOnPadav(padavId) {
     const targetMarker = window.padavMarkersMap[padavId];
     if (targetPadav && window.map) {
         window.map.flyTo([targetPadav.lat, targetPadav.lng], 13);
-        if (targetMarker) targetMarker.openPopup();
+        if (targetMarker) {
+            if (!window.padavLayer.hasLayer(targetMarker)) {
+                targetMarker.addTo(window.padavLayer);
+            }
+            targetMarker.openPopup();
+        }
     }
 }
 
