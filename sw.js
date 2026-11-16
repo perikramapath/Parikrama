@@ -1,4 +1,4 @@
-const CACHE_NAME = 'parikramapath-v1';
+const CACHE_NAME = 'parikramapath-v11';
 const TILE_CACHE = 'parikramapath-tiles-v1';
 
 const APP_ASSETS = [
@@ -26,13 +26,21 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME && k !== TILE_CACHE).map(k => caches.delete(k)))
-    )
+      Promise.all(
+        keys
+          .filter(k => k !== CACHE_NAME && k !== TILE_CACHE)
+          .map(k => caches.delete(k))
+      )
+    ).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') return;
+
   const url = new URL(event.request.url);
+
+  // 1. OpenStreetMap Tiles: Cache-First (Offline Map Support)
   if (url.hostname.includes('openstreetmap.org')) {
     event.respondWith(
       caches.match(event.request).then(cached => cached || fetch(event.request).then(res => {
@@ -42,9 +50,25 @@ self.addEventListener('fetch', event => {
         });
       }).catch(() => new Response('')))
     );
-  } else {
-    event.respondWith(
-      caches.match(event.request).then(res => res || fetch(event.request).catch(() => new Response('Offline', { status: 503 })))
-    );
+    return;
   }
+
+  // 2. Supabase API Calls: Always Live Network
+  if (url.hostname.includes('supabase.co')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // 3. App HTML / JS / CSS Files: Network-First with Offline Cache Fallback
+  event.respondWith(
+    fetch(event.request)
+      .then(networkRes => {
+        if (networkRes && networkRes.status === 200 && url.origin === self.location.origin) {
+          const resClone = networkRes.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, resClone));
+        }
+        return networkRes;
+      })
+      .catch(() => caches.match(event.request).then(cached => cached || new Response('Offline', { status: 503 })))
+  );
 });

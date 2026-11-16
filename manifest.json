@@ -1,13 +1,32 @@
 {
-  "name": "Parikramapath - Bharat Teerth & Parikrama",
+  "id": "/",
+  "name": "Parikramapath - भारत तीर्थ एवं परिक्रमा",
   "short_name": "Parikramapath",
-  "start_url": "/index.html",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#fff3e0",
-  "theme_color": "#ff5722",
-  "description": "Bharat bhar ki sabhi Teerth Yatra aur Parikrama ke route, ashram, niyam aur offline navigation.",
+  "theme_color": "#d84315",
+  "description": "भारत की समस्त तीर्थ यात्रा एवं परिक्रमा मार्गदर्शिका - लाइव रूट, आश्रम, सदाव्रत भोजन और ऑफलाइन नेविगेशन।",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23d84315'/%3E%3Ctext x='50%25' y='56%25' font-size='260' text-anchor='middle' dominant-baseline='middle'%3E%F0%9F%95%89%EF%B8%8F%3C/text%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
   ]
 }
