@@ -1,5 +1,22 @@
 window.yatraPadavsForSelection = [];
 
+function sortYatrasNarmadaFirst(list) {
+    if (!Array.isArray(list)) return [];
+    return [...list].sort((a, b) => {
+        const aSlug = (a.slug || '').toLowerCase();
+        const bSlug = (b.slug || '').toLowerCase();
+        const aName = (a.name || '').toLowerCase();
+        const bName = (b.name || '').toLowerCase();
+
+        const aIsNarmada = aSlug.includes('narmada') || aName.includes('narmada');
+        const bIsNarmada = bSlug.includes('narmada') || bName.includes('narmada');
+
+        if (aIsNarmada && !bIsNarmada) return -1;
+        if (!aIsNarmada && bIsNarmada) return 1;
+        return 0; // Baaki yatras apne add hone ke kram (created_at) me niche rahengi
+    });
+}
+
 function updateYatraSeoMeta(yatra) {
     if (!yatra) return;
     const displayName = window.currentLang === 'hi' ? (yatra.name_hi || yatra.name) : yatra.name;
@@ -24,9 +41,16 @@ async function loadAllYatras() {
     document.getElementById('langToggleBtn').innerText = t('langToggle');
 
     try {
-        const { data, error } = await supabaseClient.from('yatras').select('*').order('name');
+        // created_at ascending order taaki nayi add ki gayi yatra niche aaye
+        const { data, error } = await supabaseClient
+            .from('yatras')
+            .select('*')
+            .order('created_at', { ascending: true });
+
         if (error) throw error;
-        window.allYatras = data || [];
+
+        // Narmada Parikrama ko hamesha sabse pehle rakhein
+        window.allYatras = sortYatrasNarmadaFirst(data || []);
         renderYatraCards(window.allYatras);
         if (typeof populateSevadarYatraDropdown === 'function') populateSevadarYatraDropdown(window.allYatras);
 

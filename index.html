@@ -35,7 +35,8 @@
                 <p id="lblBrandSub" style="color:#555; margin:4px 0 0 0; font-size:13px;">भारत की समस्त तीर्थ यात्रा एवं परिक्रमा मार्गदर्शिका</p>
             </div>
             <div style="display:flex; gap:6px; align-items:center;">
-                <button onclick="openAuthModal()" class="pill-btn" style="background:#d84315; color:white;">🔑 Login</button>
+                <button id="gateProfileBtn" onclick="openProfileModal()" class="pill-btn" style="display:none; background:#2e7d32; color:white;">🪪 Profile</button>
+                <button id="gateLoginBtn" onclick="openAuthModal()" class="pill-btn" style="background:#d84315; color:white;">🔑 Login</button>
                 <button onclick="toggleLanguage()" id="langToggleBtn" class="pill-btn" style="background:#333; color:white;">🌐 English</button>
             </div>
         </div>
@@ -144,7 +145,7 @@
         <button onclick="openYatraSeoPage(); toggleMenu();">📖 यात्रा के नियम एवं जानकारी</button>
         <button onclick="openAddPadavModal(); toggleMenu();">➕ नया पड़ाव / पॉइंट जोड़ें</button>
         <button onclick="openAartiModal(); toggleMenu();">🪔 आरती एवं स्तुति</button>
-        <button id="profileMenuBtn" style="display:none;" onclick="openProfileModal(); toggleMenu();">🪪 मेरा ID कार्ड</button>
+        <button id="profileMenuBtn" style="display:none;" onclick="openProfileModal(); toggleMenu();">🪪 मेरा प्रोफ़ाइल व ID कार्ड</button>
         <button id="adminMenuBtn" style="display:none;" onclick="openAdminModal(); toggleMenu();">⚙️ Admin Panel</button>
         <button id="manualDrawMenuBtn" style="display:none; background:#e8f5e9; color:#1b5e20; font-weight:bold;" onclick="startManualLineDrawing(); toggleMenu();">✏️ मार्ग बनाएं (Line Draw)</button>
         <button id="gpsFollowMenuBtn" style="display:none; background:#0288d1; color:white; font-weight:bold;" onclick="startGpsFollowRecording(); toggleMenu();">📡 GPS Follow (लाइव मार्ग)</button>
@@ -196,7 +197,7 @@
 <!-- MODALS BACKDROP -->
 <div id="modalBackdrop" class="modal-backdrop" style="display:none;" onclick="closeAllModals()"></div>
 
-<!-- ADD / EDIT PADAV MODAL (WITH DESCRIPTION & REGISTERED USER APPROVAL NOTE) -->
+<!-- ADD / EDIT PADAV MODAL -->
 <div id="addPadavModal" class="center-modal" style="display:none;">
     <h3 id="padavModalHeading" style="margin-top:0; color:#d84315;">➕ नया पड़ाव / आश्रम जोड़ें</h3>
     <input type="hidden" id="editPadavId" value="">
@@ -216,10 +217,8 @@
         <option value="Point">📍 मार्ग बिंदु / लैंडमार्क (Point)</option>
     </select>
 
-    <!-- DESCRIPTION / DETAILS FIELD -->
-    <textarea id="newPadavDescription" rows="3" placeholder="📝 स्थान का विवरण / ऐतिहासिक या धार्मिक महत्व लिखें (जैसे: ओंकारेश्वर ज्योतिर्लिंग के बारे में जानकारी)..." class="form-input"></textarea>
+    <textarea id="newPadavDescription" rows="3" placeholder="📝 स्थान का विवरण / ऐतिहासिक या धार्मिक महत्व लिखें..." class="form-input"></textarea>
 
-    <!-- MULTIPLE RASTE SELECTION -->
     <div style="background:#fff3e0; padding:10px; border-radius:8px; border:1px solid #ffb74d; margin-bottom:10px;">
         <label style="font-size:12px; font-weight:bold; color:#d84315; display:block; margin-bottom:6px;">
             🥾 मार्ग का प्रकार चुनें (एक से अधिक चुन सकते हैं):
@@ -253,7 +252,6 @@
         <label><input type="checkbox" id="chkMedical"> 💊 मेडिकल</label>
     </div>
 
-    <!-- GPS COORDINATES -->
     <label style="font-size:12px; font-weight:bold; color:#333; display:block; margin-bottom:4px;">📍 इस पड़ाव की GPS लोकेशन *</label>
     <div style="display:flex; gap:5px; margin-bottom:10px;">
         <input type="text" id="newPadavLat" oninput="recalculateAllAddedNextPadavs()" placeholder="Latitude *" class="form-input" style="margin:0;">
@@ -261,7 +259,6 @@
         <button type="button" onclick="fillCurrentGPS()" style="background:#0288d1; color:white; border:none; border-radius:5px; padding:0 12px; cursor:pointer; font-weight:bold;">📍 GPS</button>
     </div>
 
-    <!-- AGLA PADAV SELECTOR -->
     <div style="background:#f1f8e9; padding:10px; border-radius:8px; border:1px solid #aed581; margin-bottom:10px;">
         <label style="font-size:12px; font-weight:bold; color:#33691e; display:block; margin-bottom:5px;">
             ➡️ अगला पड़ाव चुनें (एक से अधिक जोड़ने के लिए '+ जोड़ें' दबाएं):
@@ -288,7 +285,7 @@
     <button type="button" onclick="submitNewPadav()" class="primary-btn">💾 सुरक्षित करें</button>
 </div>
 
-<!-- PADAV FULL DETAILS MODAL ("READ MORE" KE LIYE - FORMATTED HTML) -->
+<!-- PADAV FULL DETAILS MODAL -->
 <div id="padavDetailModal" class="center-modal" style="display:none; max-width:460px;">
     <h3 id="detailPadavTitle" style="margin-top:0; color:#d84315; border-bottom:1px solid #eee; padding-bottom:8px;">स्थान विवरण</h3>
     <div id="detailPadavBody" style="font-size:14px; line-height:1.65; color:#222; max-height:60vh; overflow-y:auto; padding:4px 0;"></div>
@@ -333,9 +330,9 @@
     </div>
 </div>
 
-<!-- PROFILE, LIVE SELFIE, QR & DYNAMIC ID CARD MODAL -->
-<div id="profileModal" class="center-modal" style="display:none; max-width:440px;">
-    <h3 style="margin-top:0; text-align:center; color:#2e7d32;">🪪 Parikramapath Official ID Pass</h3>
+<!-- COMPLETE PROFILE EDIT, LIVE SELFIE, QR & DYNAMIC ID CARD MODAL -->
+<div id="profileModal" class="center-modal" style="display:none; max-width:450px;">
+    <h3 style="margin-top:0; text-align:center; color:#2e7d32;">🪪 मेरा प्रोफ़ाइल व Official ID Pass</h3>
 
     <!-- LIVE SELFIE CAMERA SECTION -->
     <div style="text-align:center; margin-bottom:10px; background:#f9f9f9; padding:8px; border-radius:8px; border:1px solid #eee;">
@@ -345,7 +342,7 @@
             <button type="button" onclick="captureSelfie()" style="background:#2e7d32; color:white; border:none; padding:5px 12px; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:5px;">📸 फोटो खींचें (Capture)</button>
         </div>
         <canvas id="cameraCanvas" style="display:none;"></canvas>
-        <button type="button" id="startCamBtn" onclick="startCamera()" style="background:#0288d1; color:white; border:none; padding:5px 12px; border-radius:5px; font-size:12px; font-weight:bold; cursor:pointer;">📷 लाइव सेल्फी लें (Live Selfie)</button>
+        <button type="button" id="startCamBtn" onclick="startCamera()" style="background:#0288d1; color:white; border:none; padding:5px 12px; border-radius:5px; font-size:12px; font-weight:bold; cursor:pointer;">📷 लाइव सेल्फी लें / बदलें</button>
     </div>
 
     <!-- PRINTABLE / DOWNLOADABLE ID CARD -->
@@ -358,41 +355,62 @@
             <span id="cardRoleBadge" style="background:#2e7d32; color:white; padding:3px 9px; border-radius:10px; font-size:11px; font-weight:bold;">PILGRIM</span>
         </div>
 
-        <h4 id="cardYatraTitle" style="margin:6px 0; color:#222; font-size:17px;">Yatra Name</h4>
+        <h4 id="cardYatraTitle" style="margin:6px 0; color:#222; font-size:17px;">Parikramapath</h4>
         <hr style="border:0; border-top:1px dashed #ccc; margin:8px 0;">
 
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
             <div style="font-size:12.5px; line-height:1.55; flex:1;">
                 <p style="margin:2px 0;"><b>नाम:</b> <span id="cardUserName">-</span></p>
                 <p style="margin:2px 0;"><b>मोबाइल:</b> <span id="cardUserMobile">-</span></p>
+                <p style="margin:2px 0;"><b>🩸 ब्लड ग्रुप:</b> <span id="cardBloodGroup" style="color:#c62828; font-weight:bold;">Not Set</span></p>
                 <p style="margin:2px 0;"><b>🚩 आरंभ:</b> <span id="cardStartPoint">-</span></p>
                 <p style="margin:2px 0;"><b>🏁 समापन:</b> <span id="cardEndPoint">-</span></p>
                 <p style="margin:2px 0;"><b>🆘 आपातकालीन:</b> <span id="cardEmergency">-</span></p>
                 <p style="margin:2px 0;"><b>📍 पता/क्षेत्र:</b> <span id="cardAddress">-</span></p>
             </div>
             <div style="text-align:center;">
-                <img id="idCardPic" src="https://cdn-icons-png.flaticon.com/512/149/149071.png" style="width:62px; height:62px; border-radius:8px; object-fit:cover; border:1px solid #ddd; margin-bottom:5px; display:block;">
+                <img id="idCardPic" src="https://cdn-icons-png.flaticon.com/512/149/149071.png" style="width:64px; height:64px; border-radius:8px; object-fit:cover; border:1px solid #ddd; margin-bottom:5px; display:block;">
                 <div id="qrcodeBox" style="background:white; padding:3px; border:1px solid #ddd; display:inline-block;"></div>
             </div>
         </div>
     </div>
 
-    <!-- EDIT EMERGENCY & ADDRESS -->
-    <div style="background:#f5f5f5; padding:8px; border-radius:8px; margin-bottom:10px;">
-        <input type="tel" id="profileEmergencyInput" placeholder="🆘 आपातकालीन संपर्क नंबर (Emergency Mobile)" class="form-input" style="margin-bottom:5px; font-size:12px;">
-        <input type="text" id="profileAddressInput" placeholder="📍 पूरा पता या सेवा क्षेत्र (Village / City)" class="form-input" style="margin-bottom:6px; font-size:12px;">
-        <button type="button" onclick="saveProfileExtras()" style="width:100%; background:#455a64; color:white; border:none; padding:7px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">💾 सेल्फी व विवरण सुरक्षित करें</button>
+    <!-- COMPLETE PROFILE EDIT FORM -->
+    <div style="background:#f5f5f5; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #e0e0e0;">
+        <div style="font-size:12px; font-weight:bold; color:#333; margin-bottom:6px;">✏️ प्रोफ़ाइल विवरण संपादित करें (Edit Profile):</div>
+        
+        <input type="text" id="profileFullNameInput" placeholder="👤 पूरा नाम (Full Name) *" class="form-input" style="margin-bottom:6px; font-size:12.5px;">
+        
+        <div style="display:flex; gap:6px; margin-bottom:6px;">
+            <input type="tel" id="profileMobileInput" placeholder="📱 मोबाइल नंबर *" class="form-input" style="margin:0; flex:1; font-size:12.5px;">
+            <select id="profileBloodGroupInput" class="form-input" style="margin:0; width:125px; font-size:12.5px;">
+                <option value="">🩸 Blood Group</option>
+                <option value="A+">A+</option>
+                <option value="A-">A-</option>
+                <option value="B+">B+</option>
+                <option value="B-">B-</option>
+                <option value="O+">O+</option>
+                <option value="O-">O-</option>
+                <option value="AB+">AB+</option>
+                <option value="AB-">AB-</option>
+            </select>
+        </div>
+
+        <input type="tel" id="profileEmergencyInput" placeholder="🆘 आपातकालीन संपर्क नंबर (Emergency Mobile)" class="form-input" style="margin-bottom:6px; font-size:12.5px;">
+        <input type="text" id="profileAddressInput" placeholder="📍 पूरा पता या सेवा क्षेत्र (Village / City)" class="form-input" style="margin-bottom:8px; font-size:12.5px;">
+        
+        <button type="button" onclick="saveCompleteProfile()" style="width:100%; background:#2e7d32; color:white; border:none; padding:9px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:13px;">💾 प्रोफ़ाइल व सेल्फी सेव करें</button>
     </div>
 
     <div style="display:flex; gap:6px; margin-bottom:10px;">
         <button type="button" onclick="downloadIdCardPDF()" style="flex:1; padding:9px; background:#d84315; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">📄 ID Card PDF डाउनलोड</button>
-        <button type="button" onclick="completeCurrentYatra()" style="flex:1; padding:9px; background:#0288d1; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">✅ यात्रा पूर्ण हुई</button>
+        <button type="button" id="btnCompleteYatra" onclick="completeCurrentYatra()" style="flex:1; padding:9px; background:#0288d1; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:12px;">✅ यात्रा पूर्ण हुई</button>
     </div>
 
     <div id="journeyHistoryBox" style="font-size:12px; background:#f5f5f5; padding:8px; border-radius:6px;"></div>
 </div>
 
-<!-- ADMIN / MODERATOR MODAL (WITH YATRA CRUD & AARTI MANAGER) -->
+<!-- ADMIN / MODERATOR MODAL -->
 <div id="adminModal" class="center-modal" style="display:none; max-width:520px;">
     <h3 style="margin-top:0;">⚙️ Parikramapath Admin Panel</h3>
     <div id="superAdminYatraCreator" style="display:none; background:#e3f2fd; padding:12px; border-radius:8px; margin-bottom:15px;">
@@ -429,7 +447,7 @@
     <h4>⏳ Pending Padav Approvals (<span id="modYatraLabel"></span>)</h4>
     <div id="pendingPadavsList" style="max-height:200px; overflow-y:auto; margin-bottom:15px;"></div>
 
-    <!-- ADMIN AARTI MANAGER (ACTIVE YATRA KE LIYE) -->
+    <!-- ADMIN AARTI MANAGER -->
     <div style="background:#fce4ec; padding:12px; border-radius:8px; border:1px solid #f48fb1;">
         <h4 style="margin:0 0 8px 0; color:#ad1457;">🪔 आरती एवं स्तुति जोड़ें (<span id="adminAartiYatraLabel"></span>)</h4>
         <input type="text" id="adminAartiTitle" placeholder="आरती का शीर्षक (e.g. श्री नर्मदा जी की आरती) *" class="form-input">
@@ -447,10 +465,10 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=7"></script>
-<script src="js/yatra-flow.js?v=7"></script>
-<script src="js/map.js?v=7"></script>
-<script src="js/auth-sos.js?v=7"></script>
-<script src="js/admin.js?v=7"></script>
+<script src="js/config.js?v=10"></script>
+<script src="js/yatra-flow.js?v=10"></script>
+<script src="js/map.js?v=10"></script>
+<script src="js/auth-sos.js?v=10"></script>
+<script src="js/admin.js?v=10"></script>
 </body>
 </html>

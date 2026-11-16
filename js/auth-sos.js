@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - AUTH, SEVADAR, LIVE SELFIE ID CARD & SOS
+// PARIKRAMAPATH - AUTH, COMPLETE PROFILE EDIT, ID CARD & SOS
 // =========================================================
 
 let profileVideoStream = null;
@@ -66,7 +66,7 @@ async function loginUser() {
     alert(`🙏 नमस्ते ${window.currentProfile ? window.currentProfile.full_name : ''}! Parikramapath में स्वागत है।`);
 }
 
-// 3. Apply User Session & Reveal Admin/Moderator Controls
+// 3. Apply User Session & Reveal Profile + Admin/Moderator Controls
 async function applyUserSession(user) {
     if (!user) return;
     window.currentUser = user;
@@ -80,7 +80,8 @@ async function applyUserSession(user) {
     window.currentProfile = prof || {
         id: user.id,
         full_name: user.email,
-        mobile: '-',
+        mobile: '',
+        email: user.email,
         role: 'pilgrim',
         journey_history: []
     };
@@ -88,6 +89,17 @@ async function applyUserSession(user) {
     const cleanRole = (window.currentProfile.role || '').toLowerCase().trim().replace(/\s+/g, '_');
     const isAdminOrMod = (cleanRole === 'super_admin' || cleanRole === 'admin' || cleanRole === 'moderator');
 
+    // Home Gate (Gate 1) buttons update
+    const gateLoginBtn = document.getElementById('gateLoginBtn');
+    const gateProfileBtn = document.getElementById('gateProfileBtn');
+    if (gateLoginBtn) gateLoginBtn.style.display = 'none';
+    if (gateProfileBtn) {
+        gateProfileBtn.style.display = 'inline-block';
+        const firstName = (window.currentProfile.full_name || 'Profile').split(' ')[0];
+        gateProfileBtn.innerText = `🪪 ${firstName}`;
+    }
+
+    // Map Menu buttons update
     const loginBtn = document.getElementById('loginMenuBtn');
     const logoutBtn = document.getElementById('logoutMenuBtn');
     const profileBtn = document.getElementById('profileMenuBtn');
@@ -104,7 +116,7 @@ async function applyUserSession(user) {
     if (manualDrawBtn) manualDrawBtn.style.display = isAdminOrMod ? 'block' : 'none';
     if (gpsFollowBtn) gpsFollowBtn.style.display = isAdminOrMod ? 'block' : 'none';
 
-    // Profile load hote hi map markers par Admin Edit/Delete buttons refresh karein
+    // Profile load hote hi map markers par Admin/User Edit buttons refresh karein
     if (typeof renderIsolatedPadavs === 'function' && Array.isArray(window.activeYatraPadavs) && window.activeYatraPadavs.length > 0) {
         renderIsolatedPadavs(window.activeYatraPadavs);
     }
@@ -119,7 +131,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 // =========================================================
-// 5. LIVE SELFIE CAMERA, QR CODE & PDF ID PASS
+// 5. LIVE SELFIE CAMERA, COMPLETE PROFILE EDIT, QR & PDF PASS
 // =========================================================
 async function startCamera() {
     const video = document.getElementById('cameraVideo');
@@ -178,13 +190,16 @@ function openProfileModal() {
     const uniquePassId = "PP-" + window.currentUser.id.substring(0, 8).toUpperCase();
     const yatraName = window.activeYatra
         ? `${window.activeYatra.icon_emoji || '🕉️'} ${window.activeYatra.name_hi || window.activeYatra.name}`
-        : 'Parikramapath';
+        : '🕉️ Parikramapath';
 
+    // ID Card Display Fill
     document.getElementById('idCardUniqueNo').innerText = uniquePassId;
     document.getElementById('cardYatraTitle').innerText = yatraName;
     document.getElementById('cardRoleBadge').innerText = (p.role || 'PILGRIM').toUpperCase();
     document.getElementById('cardUserName').innerText = p.full_name || '-';
     document.getElementById('cardUserMobile').innerText = p.mobile || '-';
+    const bloodEl = document.getElementById('cardBloodGroup');
+    if (bloodEl) bloodEl.innerText = p.blood_group || 'Not Set';
     document.getElementById('cardStartPoint').innerText = window.selectedStartPadav
         ? window.selectedStartPadav.name
         : (p.start_point_name || 'Not Selected');
@@ -192,8 +207,21 @@ function openProfileModal() {
     document.getElementById('cardEmergency').innerText = p.emergency_contact || 'Not Set';
     document.getElementById('cardAddress').innerText = p.address || 'Not Set';
 
+    // Complete Profile Edit Form Inputs Pre-fill
+    const nameInput = document.getElementById('profileFullNameInput');
+    const mobileInput = document.getElementById('profileMobileInput');
+    const bloodInput = document.getElementById('profileBloodGroupInput');
+    if (nameInput) nameInput.value = p.full_name || '';
+    if (mobileInput) mobileInput.value = p.mobile || '';
+    if (bloodInput) bloodInput.value = p.blood_group || '';
     document.getElementById('profileEmergencyInput').value = p.emergency_contact || '';
     document.getElementById('profileAddressInput').value = p.address || '';
+
+    // Hide "Complete Yatra" button if user is on Home Gate
+    const completeBtn = document.getElementById('btnCompleteYatra');
+    if (completeBtn) {
+        completeBtn.style.display = window.activeYatra ? 'block' : 'none';
+    }
 
     if (p.profile_pic) {
         document.getElementById('idCardPic').src = p.profile_pic;
@@ -206,7 +234,7 @@ function openProfileModal() {
     const qrBox = document.getElementById('qrcodeBox');
     if (qrBox && typeof QRCode !== 'undefined') {
         qrBox.innerHTML = '';
-        const qrText = `ID: ${uniquePassId}\nYatra: ${window.activeYatra ? window.activeYatra.name : 'Parikramapath'}\nName: ${p.full_name}\nMobile: ${p.mobile}\nRole: ${p.role}`;
+        const qrText = `ID: ${uniquePassId}\nName: ${p.full_name}\nMobile: ${p.mobile}\nBlood: ${p.blood_group || 'N/A'}\nEmergency: ${p.emergency_contact || 'N/A'}\nYatra: ${window.activeYatra ? window.activeYatra.name : 'Parikramapath'}`;
         new QRCode(qrBox, {
             text: qrText,
             width: 64,
@@ -225,23 +253,38 @@ function openProfileModal() {
     showModal('profileModal');
 }
 
-async function saveProfileExtras() {
+async function saveCompleteProfile() {
     if (!window.currentUser) return;
+
+    const fullName = document.getElementById('profileFullNameInput').value.trim();
+    const mobile = document.getElementById('profileMobileInput').value.trim();
+    const bloodGroup = document.getElementById('profileBloodGroupInput').value;
     const emergency = document.getElementById('profileEmergencyInput').value.trim();
     const address = document.getElementById('profileAddressInput').value.trim();
 
+    if (!fullName || !mobile) {
+        return alert("⚠️ कृपया अपना पूरा नाम और मोबाइल नंबर अवश्य भरें।");
+    }
+
     const updates = {
-        emergency_contact: emergency,
-        address: address
+        full_name: fullName,
+        mobile: mobile,
+        blood_group: bloodGroup || null,
+        emergency_contact: emergency || null,
+        address: address || null
     };
+
     if (capturedSelfieBase64) {
         updates.profile_pic = capturedSelfieBase64;
     }
 
     const { data, error } = await supabaseClient
         .from('profiles')
-        .update(updates)
-        .eq('id', window.currentUser.id)
+        .upsert({
+            id: window.currentUser.id,
+            email: window.currentUser.email,
+            ...updates
+        })
         .select()
         .single();
 
@@ -249,8 +292,21 @@ async function saveProfileExtras() {
 
     window.currentProfile = data;
     capturedSelfieBase64 = null;
-    alert("✅ आपका ID Pass विवरण और सेल्फी सुरक्षित हो गई है!");
+
+    // Home Gate button par bhi naya naam update karein
+    const gateProfileBtn = document.getElementById('gateProfileBtn');
+    if (gateProfileBtn) {
+        const firstName = (data.full_name || 'Profile').split(' ')[0];
+        gateProfileBtn.innerText = `🪪 ${firstName}`;
+    }
+
+    alert("✅ आपका प्रोफ़ाइल विवरण और ID Pass सफलतापूर्वक अपडेट हो गया है!");
     openProfileModal();
+}
+
+// Backward compatibility alias
+async function saveProfileExtras() {
+    return saveCompleteProfile();
 }
 
 function downloadIdCardPDF() {
@@ -270,6 +326,7 @@ function downloadIdCardPDF() {
 
 // 6. Complete Current Yatra & Switch to Next Yatra
 async function completeCurrentYatra() {
+    if (!window.activeYatra) return;
     if (!confirm("क्या आपने यह परिक्रमा पूर्ण कर ली है? इसके बाद आप नई यात्रा शुरू कर सकेंगे।")) return;
 
     const hist = Array.isArray(window.currentProfile.journey_history) ? window.currentProfile.journey_history : [];
