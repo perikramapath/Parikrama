@@ -66,34 +66,49 @@ function onRoleChange() {
         document.getElementById('regRole').value === 'supporter' ? 'block' : 'none';
 }
 
-// 1. User / Sevadar Registration
+// 1. User / Sevadar Registration (Bulletproof Metadata + Upsert)
 async function registerUser() {
     const email = document.getElementById('regEmail').value.trim();
     const password = document.getElementById('regPass').value.trim();
     const full_name = document.getElementById('regName').value.trim();
     const mobile = document.getElementById('regMobile').value.trim();
     const role = document.getElementById('regRole').value;
+    const assigned_yatra_id = role === 'supporter' ? document.getElementById('regSevadarYatra').value : null;
+    const sevadar_area = role === 'supporter' ? document.getElementById('regSevadarArea').value.trim() : null;
 
     if (!email || !password || !full_name || !mobile) {
         return alert("कृपया सभी आवश्यक जानकारी (नाम, मोबाइल, ईमेल, पासवर्ड) भरें।");
     }
 
-    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+    const { data, error } = await supabaseClient.auth.signUp({
+        email,
+        password,
+        options: {
+            data: {
+                full_name,
+                mobile,
+                role,
+                assigned_yatra_id,
+                sevadar_area
+            }
+        }
+    });
+
     if (error) return alert("Registration Error: " + error.message);
 
     if (data && data.user) {
-        const { error: profErr } = await supabaseClient.from('profiles').insert([{
+        const { error: profErr } = await supabaseClient.from('profiles').upsert([{
             id: data.user.id,
             full_name,
             mobile,
             email,
             role,
             status: role === 'supporter' ? 'pending' : 'approved',
-            assigned_yatra_id: role === 'supporter' ? document.getElementById('regSevadarYatra').value : null,
-            sevadar_area: role === 'supporter' ? document.getElementById('regSevadarArea').value.trim() : null
-        }]);
+            assigned_yatra_id,
+            sevadar_area
+        }], { onConflict: 'id' });
 
-        if (profErr) console.error("Profile insert warning:", profErr.message);
+        if (profErr) console.error("Profile upsert warning:", profErr.message);
     }
 
     alert("✅ Parikramapath पर रजिस्ट्रेशन सफल! कृपया अब लॉगिन करें।");
