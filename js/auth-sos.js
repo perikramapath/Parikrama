@@ -478,7 +478,7 @@ function triggerSOS(helpType) {
 }
 
 // =========================================================
-// 8. YATRA-SCOPED LIVE SOS POPUP & LOUD BUZZER FOR ADMIN/SEVADARS
+// 8. YATRA-SCOPED LIVE SOS POPUP & CONTINUOUS BUZZER
 // =========================================================
 let sosRealtimeChannel = null;
 let sosBuzzerInterval = null;
@@ -506,9 +506,9 @@ function playSosBeep() {
 
         let count = 0;
         const triggerPulse = () => {
-            if (!sosAudioCtx || count >= 8) {
-                stopSosBuzzer();
-                return;
+            if (!sosAudioCtx) return;
+            if (sosAudioCtx.state === 'suspended') {
+                sosAudioCtx.resume().catch(() => {});
             }
             const now = sosAudioCtx.currentTime;
             const osc = sosAudioCtx.createOscillator();
@@ -529,6 +529,7 @@ function playSosBeep() {
         };
 
         triggerPulse();
+        // Jab tak stopSosBuzzer() na dabaya jaye tab tak lagatar bajta rahega
         sosBuzzerInterval = setInterval(triggerPulse, 550);
     } catch (e) {
         console.warn("SOS Buzzer blocked until screen tap:", e);
@@ -536,7 +537,6 @@ function playSosBeep() {
 }
 
 async function showIncomingSosBanner(sos) {
-    // Sirf sambandhit yatra ke sevadar/moderator ya Super Admin ko hi alert dikhayein
     if (!isSosRelevantForStaff(sos)) return;
 
     playSosBeep();
