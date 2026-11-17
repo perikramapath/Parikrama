@@ -21,6 +21,20 @@ window.isPickingEditLocation = false;
 window.hasCenteredOnLiveGps = false;
 window.lastDbLocationPingMs = 0;
 window.adminYatriRealtimeSub = null;
+window.adminVisitorRealtimeSub = null;
+
+function getOrCreateGuestVisitorId() {
+    try {
+        let vid = localStorage.getItem('parikrama_guest_visitor_id');
+        if (!vid) {
+            vid = 'guest_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now();
+            localStorage.setItem('parikrama_guest_visitor_id', vid);
+        }
+        return vid;
+    } catch (e) {
+        return 'guest_temp_' + Date.now();
+    }
+}
 
 // ---------------------------------------------------------
 // STARTING POINT PERSISTENCE (100% LOCALSTORAGE PER YATRA)
@@ -150,7 +164,6 @@ window.locateMyCurrentPosition = function() {
 
     if (btn) btn.innerText = '⏳';
 
-    // Agar pehle se fresh coords hain to turant wahan le jayein aur saath me fresh GPS bhi lein
     if (window.yatriLiveCoords) {
         updateMyBlueLocationDot(window.yatriLiveCoords.lat, window.yatriLiveCoords.lng, true);
     }
@@ -190,35 +203,55 @@ function injectLocateMeButtonOnMap() {
 }
 
 // =========================================================
-// SYNC YATRI GPS TO SUPABASE + ADMIN LIVE YATRI MARKERS
+// SYNC BOTH REGISTERED & UNREGISTERED (GUEST) GPS TO SUPABASE
 // =========================================================
 async function syncYatriLiveLocationToDb(lat, lng, force = false) {
-    if (!window.currentUser || !window.activeYatra) return;
+    if (!window.activeYatra) return;
     const now = Date.now();
-    if (!force && (now - window.lastDbLocationPingMs) < 15000) return; // Har 15 sec me sync
+    if (!force && (now - window.lastDbLocationPingMs) < 15000) return;
     window.lastDbLocationPingMs = now;
 
     try {
-        await supabaseClient
-            .from('profiles')
-            .update({
-                live_lat: lat,
-                live_lng: lng,
-                active_yatra_id: window.activeYatra.id,
-                last_seen_at: new Date().toISOString()
-            })
-            .eq('id', window.currentUser.id);
+        if (window.currentUser) {
+            // Registered user -> profiles table
+            await supabaseClient
+                .from('profiles')
+                .update({
+                    live_lat: lat,
+                    live_lng: lng,
+                    active_yatra_id: window.activeYatra.id,
+                    last_seen_at: new Date().toISOString()
+                })
+                .eq('id', window.currentUser.id);
+        } else {
+            // Unregistered (Guest) user -> live_visitors table
+            const visitorId = getOrCreateGuestVisitorId();
+            await supabaseClient
+                .from('live_visitors')
+                .upsert([{
+                    visitor_id: visitorId,
+                    yatra_id: window.activeYatra.id,
+                    live_lat: lat,
+                    live_lng: lng,
+                    last_seen_at: new Date().toISOString()
+                }], { onConflict: 'visitor_id' });
+        }
     } catch (e) {}
 }
 
-function renderSingleAdminLiveYatri(yatri) {
+function renderSingleAdminLiveYatri(yatri, isGuest = false) {
     if (!isStrictSuperOrAdmin() || !window.map) return;
     if (!yatri || !yatri.live_lat || !yatri.live_lng) return;
-    // Apne khud ke marker ko duplicate na dikhayein
-    if (window.currentUser && String(yatri.id) === String(window.currentUser.id)) return;
 
-    // Agar admin kisi specific yatra map ke andar hai to usi yatra ke yatris dikhayein
-    if (window.activeYatra && yatri.active_yatra_id && String(yatri.active_yatra_id) !== String(window.activeYatra.id)) {
+    const recordId = isGuest ? ('guest_' + yatri.visitor_id) : ('user_' + yatri.id);
+    const yatraId = isGuest ? yatri.yatra_id : yatri.active_yatra_id;
+
+    // Apne khud ke marker ko duplicate na dikhayein
+    if (!isGuest && window.currentUser && String(yatri.id) === String(window.currentUser.id)) return;
+    if (isGuest && String(yatri.visitor_id) === String(getOrCreateGuestVisitorId())) return;
+
+    // Sirf active yatra ke yatris dikhayein
+    if (window.activeYatra && yatraId && String(yatraId) !== String(window.activeYatra.id)) {
         return;
     }
 
@@ -230,32 +263,45 @@ function renderSingleAdminLiveYatri(yatri) {
         ? new Date(yatri.last_seen_at).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' })
         : 'अभी';
 
+    const bgCol = isGuest ? '#e65100' : '#0d47a1';
+    const emoji = isGuest ? '🧭' : '🚶';
+
     const icon = L.divIcon({
         className: '',
-        html: `<div style="background:#0d47a1; color:#fff; border:2px solid #ffeb3b; border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-size:16px; box-shadow:0 3px 10px rgba(0,0,0,0.5);">🚶</div>`,
+        html: `<div style="background:${bgCol}; color:#fff; border:2px solid #ffeb3b; border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-size:16px; box-shadow:0 3px 10px rgba(0,0,0,0.5);">${emoji}</div>`,
         iconSize: [32, 32],
         iconAnchor: [16, 16]
     });
 
-    const popupHtml = `
-        <div style="font-family:sans-serif; min-width:190px; font-size:13px; line-height:1.55;">
-            <b style="color:#0d47a1; font-size:14px;">🚶 ${yatri.full_name || 'सक्रिय यात्री'}</b><br>
-            <span><b>📞 मोबाइल:</b> <a href="tel:${yatri.mobile}">${yatri.mobile || 'N/A'}</a></span><br>
-            <span><b>🕒 अंतिम अपडेट:</b> ${seenTime}</span><br>
-            <div style="margin-top:7px; display:flex; gap:6px;">
-                <a href="tel:${yatri.mobile}" style="flex:1; text-align:center; background:#2e7d32; color:#fff; padding:5px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📞 कॉल</a>
-                <a href="https://www.google.com/maps?q=${yatri.live_lat},${yatri.live_lng}" target="_blank" style="flex:1; text-align:center; background:#1565c0; color:#fff; padding:5px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📍 मैप</a>
+    const popupHtml = isGuest
+        ? `
+            <div style="font-family:sans-serif; min-width:185px; font-size:13px; line-height:1.55;">
+                <b style="color:#e65100; font-size:14px;">🧭 Guest यात्री (Unregistered)</b><br>
+                <span><b>🕒 अंतिम अपडेट:</b> ${seenTime}</span><br>
+                <div style="margin-top:7px;">
+                    <a href="https://www.google.com/maps?q=${yatri.live_lat},${yatri.live_lng}" target="_blank" style="display:block; text-align:center; background:#e65100; color:#fff; padding:5px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📍 Google Maps पर देखें</a>
+                </div>
             </div>
-        </div>
-    `;
+        `
+        : `
+            <div style="font-family:sans-serif; min-width:190px; font-size:13px; line-height:1.55;">
+                <b style="color:#0d47a1; font-size:14px;">🚶 ${yatri.full_name || 'सक्रिय यात्री'}</b><br>
+                <span><b>📞 मोबाइल:</b> <a href="tel:${yatri.mobile}">${yatri.mobile || 'N/A'}</a></span><br>
+                <span><b>🕒 अंतिम अपडेट:</b> ${seenTime}</span><br>
+                <div style="margin-top:7px; display:flex; gap:6px;">
+                    <a href="tel:${yatri.mobile}" style="flex:1; text-align:center; background:#2e7d32; color:#fff; padding:5px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📞 कॉल</a>
+                    <a href="https://www.google.com/maps?q=${yatri.live_lat},${yatri.live_lng}" target="_blank" style="flex:1; text-align:center; background:#1565c0; color:#fff; padding:5px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📍 मैप</a>
+                </div>
+            </div>
+        `;
 
-    if (window.adminYatriMarkersMap[yatri.id]) {
-        window.adminYatriMarkersMap[yatri.id].setLatLng([yatri.live_lat, yatri.live_lng]);
-        window.adminYatriMarkersMap[yatri.id].setPopupContent(popupHtml);
+    if (window.adminYatriMarkersMap[recordId]) {
+        window.adminYatriMarkersMap[recordId].setLatLng([yatri.live_lat, yatri.live_lng]);
+        window.adminYatriMarkersMap[recordId].setPopupContent(popupHtml);
     } else {
         const marker = L.marker([yatri.live_lat, yatri.live_lng], { icon }).bindPopup(popupHtml);
         marker.addTo(window.adminLiveYatrisLayer);
-        window.adminYatriMarkersMap[yatri.id] = marker;
+        window.adminYatriMarkersMap[recordId] = marker;
     }
 }
 
@@ -263,27 +309,46 @@ async function loadAllActiveYatrisForAdmin() {
     if (!isStrictSuperOrAdmin() || !window.map) return;
 
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await supabaseClient
+
+    // 1. Registered active yatris fetch karein
+    const { data: regUsers } = await supabaseClient
         .from('profiles')
         .select('id, full_name, mobile, role, active_yatra_id, live_lat, live_lng, last_seen_at')
         .not('live_lat', 'is', null)
         .gte('last_seen_at', twoHoursAgo);
 
-    if (error) {
-        console.warn("Admin live yatris load error:", error.message);
-        return;
+    if (Array.isArray(regUsers)) {
+        regUsers.forEach(u => renderSingleAdminLiveYatri(u, false));
     }
 
-    if (Array.isArray(data)) {
-        data.forEach(renderSingleAdminLiveYatri);
+    // 2. Unregistered (Guest) active yatris fetch karein
+    const { data: guestUsers } = await supabaseClient
+        .from('live_visitors')
+        .select('visitor_id, yatra_id, live_lat, live_lng, last_seen_at')
+        .gte('last_seen_at', twoHoursAgo);
+
+    if (Array.isArray(guestUsers)) {
+        guestUsers.forEach(g => renderSingleAdminLiveYatri(g, true));
     }
 
+    // 3. Realtime listeners (Registered + Guest)
     if (!window.adminYatriRealtimeSub) {
         window.adminYatriRealtimeSub = supabaseClient
             .channel('public:profiles_admin_map')
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, (payload) => {
                 if (payload && payload.new && payload.new.live_lat) {
-                    renderSingleAdminLiveYatri(payload.new);
+                    renderSingleAdminLiveYatri(payload.new, false);
+                }
+            })
+            .subscribe();
+    }
+
+    if (!window.adminVisitorRealtimeSub) {
+        window.adminVisitorRealtimeSub = supabaseClient
+            .channel('public:live_visitors_admin_map')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'live_visitors' }, (payload) => {
+                if (payload && payload.new && payload.new.live_lat) {
+                    renderSingleAdminLiveYatri(payload.new, true);
                 }
             })
             .subscribe();
@@ -432,7 +497,6 @@ function startYatriLiveProgressTracker() {
     if (!navigator.geolocation) return;
 
     navigator.geolocation.watchPosition(pos => {
-        // 150m tak ki accuracy ko accept karein taaki indoor/mobile network par bhi blue dot aur admin ping kaam kare
         if (pos.coords.accuracy && pos.coords.accuracy > 150) return;
 
         const uLat = pos.coords.latitude;
@@ -600,7 +664,7 @@ async function initAndLoadIsolatedMap() {
     }
     renderIsolatedPadavs(window.activeYatraPadavs);
 
-    // 3. AGAR SUPER_ADMIN YA ADMIN HAI TO SABHI ACTIVE YATRIS KI LIVE LOCATION LOAD KAREIN
+    // 3. AGAR SUPER_ADMIN YA ADMIN HAI TO SABHI ACTIVE YATRIS (REGISTERED + GUEST) KI LIVE LOCATION LOAD KAREIN
     if (isStrictSuperOrAdmin()) {
         loadAllActiveYatrisForAdmin();
     }
