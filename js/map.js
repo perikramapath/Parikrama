@@ -1,14 +1,16 @@
 // =========================================================
-// PARIKRAMAPATH - SEPARATE LINE DRAWER, READ MORE & ANTI-JUMP GPS
+// PARIKRAMAPATH - SEPARATE LINE DRAWER, READ MORE, LOCATE ME & LIVE ADMIN TRACKER
 // =========================================================
 
 window.map = null;
 window.padavLayer = L.layerGroup();
 window.routeLayer = L.layerGroup();
 window.autoPadavLinkLayer = L.layerGroup();
+window.adminLiveYatrisLayer = L.layerGroup();
 window.activeYatraPadavs = [];
 window.activeCustomRoutes = [];
 window.padavMarkersMap = {};
+window.adminYatriMarkersMap = {};
 window.osrmGeometryCache = {};
 
 // Live Yatri GPS Tracking & 500m Auto-Hide
@@ -17,6 +19,8 @@ window.yatriLiveMarker = null;
 window.passedPadavIds = new Set();
 window.isPickingEditLocation = false;
 window.hasCenteredOnLiveGps = false;
+window.lastDbLocationPingMs = 0;
+window.adminYatriRealtimeSub = null;
 
 // ---------------------------------------------------------
 // STARTING POINT PERSISTENCE (100% LOCALSTORAGE PER YATRA)
@@ -103,6 +107,187 @@ function isUserAdminOrMod() {
     if (!window.currentProfile || !window.currentProfile.role) return false;
     const r = window.currentProfile.role.toLowerCase().trim().replace(/\s+/g, '_');
     return (r === 'super_admin' || r === 'admin' || r === 'moderator');
+}
+
+function isStrictSuperOrAdmin() {
+    if (!window.currentProfile || !window.currentProfile.role) return false;
+    const r = window.currentProfile.role.toLowerCase().trim().replace(/\s+/g, '_');
+    return (r === 'super_admin' || r === 'admin');
+}
+
+// =========================================================
+// MY CURRENT LOCATION BUTTON + BLUE DOT ON MAP
+// =========================================================
+function updateMyBlueLocationDot(lat, lng, flyToLocation = false) {
+    window.yatriLiveCoords = { lat, lng };
+    if (!window.map) return;
+
+    if (!window.yatriLiveMarker) {
+        const yatriIcon = L.divIcon({
+            html: `<div style="background:#1976d2; border:3px solid white; border-radius:50%; width:18px; height:18px; box-shadow:0 0 0 5px rgba(25,118,210,0.35), 0 2px 8px rgba(0,0,0,0.5);"></div>`,
+            className: '',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9]
+        });
+        window.yatriLiveMarker = L.marker([lat, lng], { icon: yatriIcon, zIndexOffset: 1000 })
+            .bindPopup('📍 <b>आपकी वर्तमान लोकेशन</b>')
+            .addTo(window.map);
+    } else {
+        window.yatriLiveMarker.setLatLng([lat, lng]);
+    }
+
+    if (flyToLocation) {
+        window.map.flyTo([lat, lng], 15, { duration: 1.0 });
+        window.yatriLiveMarker.openPopup();
+    }
+}
+
+window.locateMyCurrentPosition = function() {
+    const btn = document.getElementById('btnLocateMeMap');
+    if (!navigator.geolocation) {
+        return alert("⚠️ आपका ब्राउज़र या मोबाइल GPS सपोर्ट नहीं करता।");
+    }
+
+    if (btn) btn.innerText = '⏳';
+
+    // Agar pehle se fresh coords hain to turant wahan le jayein aur saath me fresh GPS bhi lein
+    if (window.yatriLiveCoords) {
+        updateMyBlueLocationDot(window.yatriLiveCoords.lat, window.yatriLiveCoords.lng, true);
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+            if (btn) btn.innerText = '🎯';
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            updateMyBlueLocationDot(lat, lng, true);
+            await syncYatriLiveLocationToDb(lat, lng, true);
+        },
+        (err) => {
+            if (btn) btn.innerText = '🎯';
+            if (window.yatriLiveCoords) {
+                updateMyBlueLocationDot(window.yatriLiveCoords.lat, window.yatriLiveCoords.lng, true);
+            } else {
+                alert("⚠️ GPS लोकेशन नहीं मिल सकी। कृपया मोबाइल की Location (GPS) चालू करें।");
+            }
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+    );
+};
+
+function injectLocateMeButtonOnMap() {
+    if (document.getElementById('btnLocateMeMap')) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'btnLocateMeMap';
+    btn.type = 'button';
+    btn.title = 'मेरी वर्तमान GPS लोकेशन पर जाएं';
+    btn.innerText = '🎯';
+    btn.style.cssText = 'position:fixed; bottom:118px; right:10px; z-index:9998; width:42px; height:42px; border-radius:50%; background:#ffffff; color:#1976d2; border:2px solid #1976d2; font-size:20px; display:flex; align-items:center; justify-content:center; box-shadow:0 3px 10px rgba(0,0,0,0.35); cursor:pointer;';
+    btn.onclick = window.locateMyCurrentPosition;
+
+    document.body.appendChild(btn);
+}
+
+// =========================================================
+// SYNC YATRI GPS TO SUPABASE + ADMIN LIVE YATRI MARKERS
+// =========================================================
+async function syncYatriLiveLocationToDb(lat, lng, force = false) {
+    if (!window.currentUser || !window.activeYatra) return;
+    const now = Date.now();
+    if (!force && (now - window.lastDbLocationPingMs) < 15000) return; // Har 15 sec me sync
+    window.lastDbLocationPingMs = now;
+
+    try {
+        await supabaseClient
+            .from('profiles')
+            .update({
+                live_lat: lat,
+                live_lng: lng,
+                active_yatra_id: window.activeYatra.id,
+                last_seen_at: new Date().toISOString()
+            })
+            .eq('id', window.currentUser.id);
+    } catch (e) {}
+}
+
+function renderSingleAdminLiveYatri(yatri) {
+    if (!isStrictSuperOrAdmin() || !window.map) return;
+    if (!yatri || !yatri.live_lat || !yatri.live_lng) return;
+    // Apne khud ke marker ko duplicate na dikhayein
+    if (window.currentUser && String(yatri.id) === String(window.currentUser.id)) return;
+
+    // Agar admin kisi specific yatra map ke andar hai to usi yatra ke yatris dikhayein
+    if (window.activeYatra && yatri.active_yatra_id && String(yatri.active_yatra_id) !== String(window.activeYatra.id)) {
+        return;
+    }
+
+    if (!window.map.hasLayer(window.adminLiveYatrisLayer)) {
+        window.adminLiveYatrisLayer.addTo(window.map);
+    }
+
+    const seenTime = yatri.last_seen_at
+        ? new Date(yatri.last_seen_at).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' })
+        : 'अभी';
+
+    const icon = L.divIcon({
+        className: '',
+        html: `<div style="background:#0d47a1; color:#fff; border:2px solid #ffeb3b; border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-size:16px; box-shadow:0 3px 10px rgba(0,0,0,0.5);">🚶</div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+    });
+
+    const popupHtml = `
+        <div style="font-family:sans-serif; min-width:190px; font-size:13px; line-height:1.55;">
+            <b style="color:#0d47a1; font-size:14px;">🚶 ${yatri.full_name || 'सक्रिय यात्री'}</b><br>
+            <span><b>📞 मोबाइल:</b> <a href="tel:${yatri.mobile}">${yatri.mobile || 'N/A'}</a></span><br>
+            <span><b>🕒 अंतिम अपडेट:</b> ${seenTime}</span><br>
+            <div style="margin-top:7px; display:flex; gap:6px;">
+                <a href="tel:${yatri.mobile}" style="flex:1; text-align:center; background:#2e7d32; color:#fff; padding:5px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📞 कॉल</a>
+                <a href="https://www.google.com/maps?q=${yatri.live_lat},${yatri.live_lng}" target="_blank" style="flex:1; text-align:center; background:#1565c0; color:#fff; padding:5px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📍 मैप</a>
+            </div>
+        </div>
+    `;
+
+    if (window.adminYatriMarkersMap[yatri.id]) {
+        window.adminYatriMarkersMap[yatri.id].setLatLng([yatri.live_lat, yatri.live_lng]);
+        window.adminYatriMarkersMap[yatri.id].setPopupContent(popupHtml);
+    } else {
+        const marker = L.marker([yatri.live_lat, yatri.live_lng], { icon }).bindPopup(popupHtml);
+        marker.addTo(window.adminLiveYatrisLayer);
+        window.adminYatriMarkersMap[yatri.id] = marker;
+    }
+}
+
+async function loadAllActiveYatrisForAdmin() {
+    if (!isStrictSuperOrAdmin() || !window.map) return;
+
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabaseClient
+        .from('profiles')
+        .select('id, full_name, mobile, role, active_yatra_id, live_lat, live_lng, last_seen_at')
+        .not('live_lat', 'is', null)
+        .gte('last_seen_at', twoHoursAgo);
+
+    if (error) {
+        console.warn("Admin live yatris load error:", error.message);
+        return;
+    }
+
+    if (Array.isArray(data)) {
+        data.forEach(renderSingleAdminLiveYatri);
+    }
+
+    if (!window.adminYatriRealtimeSub) {
+        window.adminYatriRealtimeSub = supabaseClient
+            .channel('public:profiles_admin_map')
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, (payload) => {
+                if (payload && payload.new && payload.new.live_lat) {
+                    renderSingleAdminLiveYatri(payload.new);
+                }
+            })
+            .subscribe();
+    }
 }
 
 // =========================================================
@@ -247,31 +432,18 @@ function startYatriLiveProgressTracker() {
     if (!navigator.geolocation) return;
 
     navigator.geolocation.watchPosition(pos => {
-        if (pos.coords.accuracy && pos.coords.accuracy > 50) return;
+        // 150m tak ki accuracy ko accept karein taaki indoor/mobile network par bhi blue dot aur admin ping kaam kare
+        if (pos.coords.accuracy && pos.coords.accuracy > 150) return;
 
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
-        window.yatriLiveCoords = { lat: uLat, lng: uLng };
 
-        if (window.map) {
-            if (!window.yatriLiveMarker) {
-                const yatriIcon = L.divIcon({
-                    html: `<div style="background:#1976d2; border:3px solid white; border-radius:50%; width:18px; height:18px; box-shadow:0 0 12px rgba(25,118,210,0.95);"></div>`,
-                    className: '',
-                    iconSize: [18, 18]
-                });
-                window.yatriLiveMarker = L.marker([uLat, uLng], { icon: yatriIcon })
-                    .bindPopup('🚶 <b>आपकी वर्तमान लोकेशन</b>')
-                    .addTo(window.map);
-            } else {
-                window.yatriLiveMarker.setLatLng([uLat, uLng]);
-            }
+        updateMyBlueLocationDot(uLat, uLng, false);
+        syncYatriLiveLocationToDb(uLat, uLng, false);
 
-            // Yatra shuru hone ke baad map ko seedhe yatri ki current live location par focus karein
-            if (!window.hasCenteredOnLiveGps && !window.isManualDrawing && !window.isGpsFollowActive) {
-                window.hasCenteredOnLiveGps = true;
-                window.map.setView([uLat, uLng], 13);
-            }
+        if (window.map && !window.hasCenteredOnLiveGps && !window.isManualDrawing && !window.isGpsFollowActive) {
+            window.hasCenteredOnLiveGps = true;
+            window.map.setView([uLat, uLng], 13);
         }
 
         if (isUserAdminOrMod()) return;
@@ -313,8 +485,6 @@ function startYatriLiveProgressTracker() {
 async function initAndLoadIsolatedMap() {
     if (!window.activeYatra) return;
 
-    // Ek baar starting point set hone par localStorage me save rahega;
-    // yatra shuru hone ke baad map yatri ki live location par focus karega
     if (window.selectedStartPadav) {
         saveUserStartPadavLocal(window.activeYatra, window.selectedStartPadav);
     } else {
@@ -343,6 +513,9 @@ async function initAndLoadIsolatedMap() {
         window.routeLayer.addTo(window.map);
         window.autoPadavLinkLayer.addTo(window.map);
         window.padavLayer.addTo(window.map);
+        window.adminLiveYatrisLayer.addTo(window.map);
+
+        injectLocateMeButtonOnMap();
 
         // MAP CLICK HANDLER
         window.map.on('click', async function(e) {
@@ -368,7 +541,6 @@ async function initAndLoadIsolatedMap() {
                 return;
             }
 
-            // Sirf login user hi map par click karke naya padav/point add kar sakta hai
             if (window.currentUser) {
                 const latStr = clickLat.toFixed(6);
                 const lngStr = clickLng.toFixed(6);
@@ -395,7 +567,10 @@ async function initAndLoadIsolatedMap() {
         window.padavLayer.clearLayers();
         window.routeLayer.clearLayers();
         window.autoPadavLinkLayer.clearLayers();
+        window.adminLiveYatrisLayer.clearLayers();
+        window.adminYatriMarkersMap = {};
         window.map.setView([initialLat, initialLng], initialZoom);
+        injectLocateMeButtonOnMap();
     }
 
     setTimeout(() => { if (window.map) window.map.invalidateSize(); }, 200);
@@ -424,6 +599,11 @@ async function initAndLoadIsolatedMap() {
         if (freshMatch) window.selectedStartPadav = freshMatch;
     }
     renderIsolatedPadavs(window.activeYatraPadavs);
+
+    // 3. AGAR SUPER_ADMIN YA ADMIN HAI TO SABHI ACTIVE YATRIS KI LIVE LOCATION LOAD KAREIN
+    if (isStrictSuperOrAdmin()) {
+        loadAllActiveYatrisForAdmin();
+    }
 }
 
 async function drawAutoPadavConnectingLines(visibleList) {
@@ -550,7 +730,6 @@ function renderIsolatedPadavs(list) {
             ? `<div style="background:#2e7d32; color:white; padding:4px; border-radius:4px; font-size:11px; font-weight:bold; margin-bottom:5px; text-align:center;">🚩 आपका प्रारंभिक पड़ाव</div>`
             : `<button type="button" onclick="setManualStartPadav('${p.id}')" style="width:100%; background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; padding:4px 6px; border-radius:4px; font-size:11px; font-weight:bold; margin-bottom:6px; cursor:pointer;">🚩 इसे प्रारंभिक पड़ाव (Start) बनाएं</button>`;
 
-        // 1-LINE DESCRIPTION + "READ MORE" BUTTON
         let descriptionPreviewHtml = '';
         if (p.description && p.description.trim().length > 0) {
             const cleanOneLine = p.description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -655,7 +834,6 @@ function renderIsolatedPadavs(list) {
                 `</div>`;
         }
 
-        // REGISTERED USER EDIT BUTTON + ADMIN EDIT/DELETE BUTTONS
         let actionBtnsHtml = '';
         if (adminMode) {
             actionBtnsHtml = `
