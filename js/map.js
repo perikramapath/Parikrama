@@ -18,6 +18,50 @@ window.passedPadavIds = new Set();
 window.isPickingEditLocation = false;
 
 // ---------------------------------------------------------
+// STARTING POINT PERSISTENCE (100% LOCALSTORAGE PER YATRA)
+// ---------------------------------------------------------
+function getSavedStartPadavKey(yatra) {
+    const slug = (yatra?.slug || yatra?.id || 'default').toString().toLowerCase().trim();
+    return `parikrama_start_padav_${slug}`;
+}
+
+function saveUserStartPadavLocal(yatra, padavObj) {
+    if (!yatra || !padavObj) return;
+    try {
+        localStorage.setItem(getSavedStartPadavKey(yatra), JSON.stringify({
+            id: padavObj.id,
+            name: padavObj.name,
+            lat: padavObj.lat,
+            lng: padavObj.lng
+        }));
+    } catch (e) {}
+}
+
+function getSavedUserStartPadavLocal(yatra) {
+    if (!yatra) return null;
+    try {
+        const raw = localStorage.getItem(getSavedStartPadavKey(yatra));
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+window.setManualStartPadav = function(padavId) {
+    if (!window.activeYatra) return;
+    const found = (window.activeYatraPadavs || []).find(p => String(p.id) === String(padavId));
+    if (!found) return;
+
+    window.selectedStartPadav = found;
+    saveUserStartPadavLocal(window.activeYatra, found);
+    renderIsolatedPadavs(window.activeYatraPadavs);
+    if (window.map) {
+        window.map.flyTo([found.lat, found.lng], 13);
+    }
+    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है। अब अगली बार यह यात्रा यहीं से खुलेगी।`);
+};
+
+// ---------------------------------------------------------
 // FUNCTION GROUP 1: MANUAL POINT-TO-POINT LINE DRAWING
 // ---------------------------------------------------------
 window.isManualDrawing = false;
@@ -68,7 +112,7 @@ function isUserAdminOrMod() {
 // =========================================================
 function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
     const routes = window.activeCustomRoutes || [];
-    const snapToleranceMeters = 350; // 350m ke dayre me agar custom line start/end ya guzarti hai
+    const snapToleranceMeters = 350;
 
     for (const r of routes) {
         const coords = r.coordinates;
@@ -265,6 +309,17 @@ function startYatriLiveProgressTracker() {
 async function initAndLoadIsolatedMap() {
     if (!window.activeYatra) return;
 
+    // Agar user ne abhi starting point select kiya hai to localStorage me save karein;
+    // warna pehle se saved starting point restore karein
+    if (window.selectedStartPadav) {
+        saveUserStartPadavLocal(window.activeYatra, window.selectedStartPadav);
+    } else {
+        const savedStart = getSavedUserStartPadavLocal(window.activeYatra);
+        if (savedStart) {
+            window.selectedStartPadav = savedStart;
+        }
+    }
+
     const startLat = window.selectedStartPadav ? window.selectedStartPadav.lat : window.activeYatra.center_lat;
     const startLng = window.selectedStartPadav ? window.selectedStartPadav.lng : window.activeYatra.center_lng;
     const startZoom = window.selectedStartPadav ? 12 : (window.activeYatra.default_zoom || 10);
@@ -305,17 +360,18 @@ async function initAndLoadIsolatedMap() {
                 return;
             }
 
-            // Koi bhi registered user map par click karke naya padav/point add kar sakta hai (approval ke baad dikhega)
+            // Sirf login user hi map par click karke naya padav/point add kar sakta hai
             if (window.currentUser) {
                 const latStr = clickLat.toFixed(6);
                 const lngStr = clickLng.toFixed(6);
+                const adminLabel = isUserAdminOrMod() ? '➕ यहाँ नया पड़ाव जोड़ें (सीधे लाइव)' : '➕ नया पड़ाव सुझाएं (Admin अप्रूवल के बाद दिखेगा)';
                 const quickAddHtml = `
-                    <div style="text-align:center; font-family:sans-serif; min-width:175px;">
+                    <div style="text-align:center; font-family:sans-serif; min-width:185px;">
                         <b style="font-size:12px; color:#333;">📍 चयनित स्थान</b><br>
                         <small style="color:#666;">${latStr}, ${lngStr}</small><br>
                         <button onclick="openAddPadavAtCoords('${latStr}', '${lngStr}')" 
                             style="margin-top:8px; width:100%; background:#2e7d32; color:white; border:none; padding:7px 10px; border-radius:5px; font-size:12px; font-weight:bold; cursor:pointer;">
-                            ➕ यहाँ नया पड़ाव / पॉइंट जोड़ें
+                            ${adminLabel}
                         </button>
                     </div>
                 `;
@@ -336,7 +392,7 @@ async function initAndLoadIsolatedMap() {
 
     setTimeout(() => { if (window.map) window.map.invalidateSize(); }, 200);
 
-    // 1. PEHLE CUSTOM DRAWN ROUTES LOAD KAREIN TAAKI AUTO-OSRM UNHE OVERLAP NA KARE
+    // 1. PEHLE CUSTOM DRAWN ROUTES LOAD KAREIN
     const { data: routes } = await supabaseClient
         .from('yatra_routes')
         .select('*')
@@ -353,8 +409,12 @@ async function initAndLoadIsolatedMap() {
         }
     });
 
-    // 2. AB PADAVS AUR SIRF BINA-CUSTOM-LINE WALE ROUTES RENDER KAREIN
+    // 2. AB PADAVS RENDER KAREIN
     window.activeYatraPadavs = window.yatraPadavsForSelection || [];
+    if (window.selectedStartPadav && window.activeYatraPadavs.length > 0) {
+        const freshMatch = window.activeYatraPadavs.find(item => String(item.id) === String(window.selectedStartPadav.id));
+        if (freshMatch) window.selectedStartPadav = freshMatch;
+    }
     renderIsolatedPadavs(window.activeYatraPadavs);
 }
 
@@ -379,7 +439,6 @@ async function drawAutoPadavConnectingLines(visibleList) {
             const targetP = window.activeYatraPadavs.find(item => item.id === np.id);
             if (!targetP || !targetP.lat || !targetP.lng) continue;
 
-            // AGAR IN DO BINDUS KE BEECH PEHLE SE CUSTOM LINE DRAW KI GAYI HAI TO ROAD WALA AUTO-ROUTE SKIP KAREIN
             if (hasCustomDrawnRouteBetween(p.lat, p.lng, targetP.lat, targetP.lng)) {
                 continue;
             }
@@ -456,8 +515,9 @@ function renderIsolatedPadavs(list) {
     visiblePadavs.forEach(p => {
         if (!p.lat || !p.lng) return;
 
-        const isStart = window.selectedStartPadav && window.selectedStartPadav.id === p.id;
+        const isStart = window.selectedStartPadav && String(window.selectedStartPadav.id) === String(p.id);
         const isPointOnly = (p.category === 'Point');
+        const isPending = (p.status === 'pending');
 
         const emoji = isStart ? '🚩' : (
             p.category === 'Mandir' ? '🛕' :
@@ -465,7 +525,7 @@ function renderIsolatedPadavs(list) {
             (p.category === 'Medical' ? '🏥' :
             (isPointOnly ? '📍' : '🛌')))
         );
-        const borderCol = isStart ? '#2e7d32' : (isPointOnly ? '#546e7a' : (window.activeYatra?.theme_color || '#d84315'));
+        const borderCol = isStart ? '#2e7d32' : (isPending ? '#ff9800' : (isPointOnly ? '#546e7a' : (window.activeYatra?.theme_color || '#d84315')));
         const size = isStart ? 38 : (isPointOnly ? 26 : 30);
 
         const icon = L.divIcon({
@@ -474,9 +534,13 @@ function renderIsolatedPadavs(list) {
             iconSize: [size, size]
         });
 
+        const pendingBadge = isPending
+            ? `<div style="background:#fff3e0; color:#e65100; border:1px solid #ffb74d; padding:3px 6px; border-radius:4px; font-size:11px; font-weight:bold; margin-bottom:5px; text-align:center;">⏳ Admin Approval Pending</div>`
+            : '';
+
         const startTag = isStart
             ? `<div style="background:#2e7d32; color:white; padding:4px; border-radius:4px; font-size:11px; font-weight:bold; margin-bottom:5px; text-align:center;">🚩 आपका प्रारंभिक पड़ाव</div>`
-            : '';
+            : `<button type="button" onclick="setManualStartPadav('${p.id}')" style="width:100%; background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; padding:4px 6px; border-radius:4px; font-size:11px; font-weight:bold; margin-bottom:6px; cursor:pointer;">🚩 इसे प्रारंभिक पड़ाव (Start) बनाएं</button>`;
 
         // 1-LINE DESCRIPTION + "READ MORE" BUTTON
         let descriptionPreviewHtml = '';
@@ -565,7 +629,6 @@ function renderIsolatedPadavs(list) {
                             }
                         }
 
-                        // CUSTOM DRAWN LINE SE EXACT KM CALCULATE KAREIN
                         const customKm = targetP ? getCustomRouteKmBetween(p.lat, p.lng, targetP.lat, targetP.lng) : null;
                         const displayKm = (customKm !== null && customKm > 0) ? customKm : np.km;
 
@@ -607,6 +670,7 @@ function renderIsolatedPadavs(list) {
 
         const popupHtml = `
             <div style="min-width:225px; max-width:265px; font-family:sans-serif;">
+                ${pendingBadge}
                 ${startTag}
                 <span style="font-size:11px; background:#fff3e0; color:#e65100; padding:2px 6px; border-radius:4px; font-weight:bold;">${p.sub_route || window.activeYatra.name}</span>
                 <h4 style="margin:6px 0 4px 0; color:#222; font-size:15px;">${p.name}</h4>
