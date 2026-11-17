@@ -429,20 +429,61 @@ function triggerSOS(helpType) {
 }
 
 // =========================================================
-// 8. LIVE SOS NOTIFICATION POPUP FOR ADMIN & SEVADARS
+// 8. LIVE SOS NOTIFICATION POPUP & LOUD BUZZER FOR ADMIN/SEVADARS
 // =========================================================
 let sosRealtimeChannel = null;
+let sosBuzzerInterval = null;
+let sosAudioCtx = null;
+
+function stopSosBuzzer() {
+    if (sosBuzzerInterval) {
+        clearInterval(sosBuzzerInterval);
+        sosBuzzerInterval = null;
+    }
+    if (sosAudioCtx) {
+        try { sosAudioCtx.close(); } catch (e) {}
+        sosAudioCtx = null;
+    }
+}
 
 function playSosBeep() {
+    stopSosBuzzer();
     try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(880, ctx.currentTime);
-        osc.connect(ctx.destination);
-        osc.start();
-        setTimeout(() => { osc.stop(); ctx.close(); }, 450);
-    } catch (e) {}
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        sosAudioCtx = new AudioCtx();
+        if (sosAudioCtx.state === 'suspended') {
+            sosAudioCtx.resume();
+        }
+
+        let count = 0;
+        const triggerPulse = () => {
+            if (!sosAudioCtx || count >= 8) {
+                stopSosBuzzer();
+                return;
+            }
+            const now = sosAudioCtx.currentTime;
+            const osc = sosAudioCtx.createOscillator();
+            const gain = sosAudioCtx.createGain();
+
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(count % 2 === 0 ? 980 : 740, now);
+
+            gain.gain.setValueAtTime(0.95, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.45);
+
+            osc.connect(gain);
+            gain.connect(sosAudioCtx.destination);
+
+            osc.start(now);
+            osc.stop(now + 0.45);
+            count++;
+        };
+
+        triggerPulse();
+        sosBuzzerInterval = setInterval(triggerPulse, 550);
+    } catch (e) {
+        console.warn("SOS Buzzer blocked until screen tap:", e);
+    }
 }
 
 function showIncomingSosBanner(sos) {
@@ -451,7 +492,7 @@ function showIncomingSosBanner(sos) {
     if (!box) {
         box = document.createElement('div');
         box.id = 'liveSosAlertBox';
-        box.style.cssText = 'position:fixed; top:14px; right:14px; z-index:99999; background:#b71c1c; color:#fff; padding:14px 16px; border-radius:12px; box-shadow:0 8px 25px rgba(0,0,0,0.45); max-width:340px; width:90%; border:2px solid #ffcdd2; font-family:sans-serif;';
+        box.style.cssText = 'position:fixed; top:14px; right:14px; z-index:99999; background:#b71c1c; color:#fff; padding:14px 16px; border-radius:12px; box-shadow:0 8px 25px rgba(0,0,0,0.5); max-width:340px; width:90%; border:2px solid #ffcdd2; font-family:sans-serif;';
         document.body.appendChild(box);
     }
 
@@ -461,16 +502,17 @@ function showIncomingSosBanner(sos) {
     box.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
             <b style="font-size:15px;">🚨 SOS अलर्ट (${timeStr})</b>
-            <button onclick="document.getElementById('liveSosAlertBox').remove()" style="background:rgba(255,255,255,0.2); border:none; color:#fff; border-radius:6px; padding:2px 8px; cursor:pointer; font-weight:bold;">✖</button>
+            <button onclick="stopSosBuzzer(); document.getElementById('liveSosAlertBox').remove();" style="background:rgba(255,255,255,0.2); border:none; color:#fff; border-radius:6px; padding:2px 8px; cursor:pointer; font-weight:bold;">✖</button>
         </div>
         <div style="font-size:13px; line-height:1.5;">
             <div><b>सहायता:</b> ${sos.help_type || 'Emergency'}</div>
             <div><b>यात्री:</b> ${sos.user_name || 'Registered Yatri'}</div>
             <div><b>मोबाइल:</b> <a href="tel:${sos.user_mobile}" style="color:#ffeb3b; font-weight:bold;">${sos.user_mobile || 'N/A'}</a></div>
         </div>
-        <div style="display:flex; gap:8px; margin-top:10px;">
-            <a href="tel:${sos.user_mobile}" style="flex:1; text-align:center; background:#2e7d32; color:#fff; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📞 कॉल करें</a>
-            <a href="${mapUrl}" target="_blank" style="flex:1; text-align:center; background:#fff; color:#b71c1c; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📍 लोकेशन देखें</a>
+        <div style="display:flex; gap:6px; margin-top:10px;">
+            <a href="tel:${sos.user_mobile}" onclick="stopSosBuzzer()" style="flex:1; text-align:center; background:#2e7d32; color:#fff; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📞 कॉल</a>
+            <a href="${mapUrl}" target="_blank" onclick="stopSosBuzzer()" style="flex:1; text-align:center; background:#fff; color:#b71c1c; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📍 मैप</a>
+            <button type="button" onclick="stopSosBuzzer()" style="background:#212121; color:#fff; border:none; padding:7px 9px; border-radius:6px; font-weight:bold; font-size:12px; cursor:pointer;">🔇 शांत</button>
         </div>
     `;
 }
