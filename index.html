@@ -795,19 +795,35 @@ window.addEventListener('appinstalled', () => {
 });
 
 async function triggerPwaInstall() {
+    // 1. Agar Chrome/Edge ka native install prompt ready hai to seedha dikhayein
     if (deferredPwaPrompt) {
-        deferredPwaPrompt.prompt();
-        const { outcome } = await deferredPwaPrompt.userChoice;
-        if (outcome === 'accepted') {
-            deferredPwaPrompt = null;
+        try {
+            deferredPwaPrompt.prompt();
+            const { outcome } = await deferredPwaPrompt.userChoice;
+            if (outcome === 'accepted') {
+                deferredPwaPrompt = null;
+            }
+            return;
+        } catch (err) {
+            console.warn('PWA prompt error:', err);
         }
+    }
+
+    // 2. Fallback: Manual Install Guide Modal ko zabardasti upar (z-index: 9999) dikhayein
+    const guideModal = document.getElementById('pwaGuideModal');
+    const backdrop = document.getElementById('modalBackdrop');
+
+    if (guideModal) {
+        if (backdrop) {
+            backdrop.style.display = 'block';
+            backdrop.style.zIndex = '9998';
+        }
+        guideModal.style.display = 'block';
+        guideModal.style.zIndex = '9999';
         return;
     }
-    if (typeof showModal === 'function') {
-        showModal('pwaGuideModal');
-    } else {
-        alert("अपने ब्राउज़र मेनू (⋮ या Share) में जाकर 'Add to Home Screen' चुनें।");
-    }
+
+    alert("अपने ब्राउज़र मेनू (⋮ या Share) में जाकर 'Add to Home Screen' चुनें।");
 }
 
 if ('serviceWorker' in navigator) {
