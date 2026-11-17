@@ -16,6 +16,7 @@ window.yatriLiveCoords = null;
 window.yatriLiveMarker = null;
 window.passedPadavIds = new Set();
 window.isPickingEditLocation = false;
+window.hasCenteredOnLiveGps = false;
 
 // ---------------------------------------------------------
 // STARTING POINT PERSISTENCE (100% LOCALSTORAGE PER YATRA)
@@ -55,10 +56,7 @@ window.setManualStartPadav = function(padavId) {
     window.selectedStartPadav = found;
     saveUserStartPadavLocal(window.activeYatra, found);
     renderIsolatedPadavs(window.activeYatraPadavs);
-    if (window.map) {
-        window.map.flyTo([found.lat, found.lng], 13);
-    }
-    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है। अब अगली बार यह यात्रा यहीं से खुलेगी।`);
+    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है। अब आपकी लाइव लोकेशन के अनुसार आगे के पड़ाव दिखते रहेंगे।`);
 };
 
 // ---------------------------------------------------------
@@ -243,7 +241,7 @@ function openPadavDetailsModal(padavId) {
 }
 
 // =========================================================
-// YATRI LIVE PROGRESS TRACKER (500M AAGE JANE PAR PICHHLA PADAV HIDE)
+// YATRI LIVE PROGRESS TRACKER (LIVE LOCATION FOCUS + 500M AUTO-HIDE)
 // =========================================================
 function startYatriLiveProgressTracker() {
     if (!navigator.geolocation) return;
@@ -258,15 +256,21 @@ function startYatriLiveProgressTracker() {
         if (window.map) {
             if (!window.yatriLiveMarker) {
                 const yatriIcon = L.divIcon({
-                    html: `<div style="background:#1976d2; border:3px solid white; border-radius:50%; width:16px; height:16px; box-shadow:0 0 10px rgba(25,118,210,0.9);"></div>`,
+                    html: `<div style="background:#1976d2; border:3px solid white; border-radius:50%; width:18px; height:18px; box-shadow:0 0 12px rgba(25,118,210,0.95);"></div>`,
                     className: '',
-                    iconSize: [16, 16]
+                    iconSize: [18, 18]
                 });
                 window.yatriLiveMarker = L.marker([uLat, uLng], { icon: yatriIcon })
                     .bindPopup('🚶 <b>आपकी वर्तमान लोकेशन</b>')
                     .addTo(window.map);
             } else {
                 window.yatriLiveMarker.setLatLng([uLat, uLng]);
+            }
+
+            // Yatra shuru hone ke baad map ko seedhe yatri ki current live location par focus karein
+            if (!window.hasCenteredOnLiveGps && !window.isManualDrawing && !window.isGpsFollowActive) {
+                window.hasCenteredOnLiveGps = true;
+                window.map.setView([uLat, uLng], 13);
             }
         }
 
@@ -293,7 +297,7 @@ function startYatriLiveProgressTracker() {
                             statusChanged = true;
                         }
                     }
-                } else if (window.selectedStartPadav && window.selectedStartPadav.id === p.id) {
+                } else if (window.selectedStartPadav && String(window.selectedStartPadav.id) === String(p.id)) {
                     window.passedPadavIds.add(p.id);
                     statusChanged = true;
                 }
@@ -309,8 +313,8 @@ function startYatriLiveProgressTracker() {
 async function initAndLoadIsolatedMap() {
     if (!window.activeYatra) return;
 
-    // Agar user ne abhi starting point select kiya hai to localStorage me save karein;
-    // warna pehle se saved starting point restore karein
+    // Ek baar starting point set hone par localStorage me save rahega;
+    // yatra shuru hone ke baad map yatri ki live location par focus karega
     if (window.selectedStartPadav) {
         saveUserStartPadavLocal(window.activeYatra, window.selectedStartPadav);
     } else {
@@ -320,12 +324,16 @@ async function initAndLoadIsolatedMap() {
         }
     }
 
-    const startLat = window.selectedStartPadav ? window.selectedStartPadav.lat : window.activeYatra.center_lat;
-    const startLng = window.selectedStartPadav ? window.selectedStartPadav.lng : window.activeYatra.center_lng;
-    const startZoom = window.selectedStartPadav ? 12 : (window.activeYatra.default_zoom || 10);
+    window.hasCenteredOnLiveGps = false;
+
+    const initialLat = window.yatriLiveCoords?.lat
+        || (window.selectedStartPadav ? window.selectedStartPadav.lat : window.activeYatra.center_lat);
+    const initialLng = window.yatriLiveCoords?.lng
+        || (window.selectedStartPadav ? window.selectedStartPadav.lng : window.activeYatra.center_lng);
+    const initialZoom = (window.yatriLiveCoords || window.selectedStartPadav) ? 13 : (window.activeYatra.default_zoom || 10);
 
     if (!window.map) {
-        window.map = L.map('map', { zoomControl: false }).setView([startLat, startLng], startZoom);
+        window.map = L.map('map', { zoomControl: false }).setView([initialLat, initialLng], initialZoom);
         L.control.zoom({ position: 'bottomright' }).addTo(window.map);
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -387,7 +395,7 @@ async function initAndLoadIsolatedMap() {
         window.padavLayer.clearLayers();
         window.routeLayer.clearLayers();
         window.autoPadavLinkLayer.clearLayers();
-        window.map.setView([startLat, startLng], startZoom);
+        window.map.setView([initialLat, initialLng], initialZoom);
     }
 
     setTimeout(() => { if (window.map) window.map.invalidateSize(); }, 200);
@@ -693,8 +701,6 @@ function renderIsolatedPadavs(list) {
         } else {
             marker.addTo(window.padavLayer);
         }
-
-        if (isStart && window.padavLayer.hasLayer(marker)) marker.openPopup();
     });
 }
 
