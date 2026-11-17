@@ -1,4 +1,4 @@
-const CACHE_NAME = 'parikramapath-v11';
+const CACHE_NAME = 'parikramapath-v12';
 const TILE_CACHE = 'parikramapath-tiles-v1';
 
 const APP_ASSETS = [
@@ -7,8 +7,11 @@ const APP_ASSETS = [
   '/yatra-guide.html',
   '/style.css',
   '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png',
   '/js/config.js',
   '/js/yatra-flow.js',
+  '/js/visited-local.js',
   '/js/map.js',
   '/js/auth-sos.js',
   '/js/admin.js'
