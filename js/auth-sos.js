@@ -88,6 +88,7 @@ async function applyUserSession(user) {
 
     const cleanRole = (window.currentProfile.role || '').toLowerCase().trim().replace(/\s+/g, '_');
     const isAdminOrMod = (cleanRole === 'super_admin' || cleanRole === 'admin' || cleanRole === 'moderator');
+    const isStaff = isAdminOrMod || (cleanRole === 'supporter' && window.currentProfile.status === 'approved');
 
     // Home Gate (Gate 1) buttons update
     const gateLoginBtn = document.getElementById('gateLoginBtn');
@@ -115,6 +116,11 @@ async function applyUserSession(user) {
     if (adminBtn) adminBtn.style.display = isAdminOrMod ? 'block' : 'none';
     if (manualDrawBtn) manualDrawBtn.style.display = isAdminOrMod ? 'block' : 'none';
     if (gpsFollowBtn) gpsFollowBtn.style.display = isAdminOrMod ? 'block' : 'none';
+
+    // Admin aur Sevadar ke liye Live SOS Listener chalu karein
+    if (isStaff) {
+        startLiveSosListener();
+    }
 
     // Profile load hote hi map markers par Admin/User Edit buttons refresh karein
     if (typeof renderIsolatedPadavs === 'function' && Array.isArray(window.activeYatraPadavs) && window.activeYatraPadavs.length > 0) {
@@ -192,7 +198,6 @@ function openProfileModal() {
         ? `${window.activeYatra.icon_emoji || '🕉️'} ${window.activeYatra.name_hi || window.activeYatra.name}`
         : '🕉️ Parikramapath';
 
-    // ID Card Display Fill
     document.getElementById('idCardUniqueNo').innerText = uniquePassId;
     document.getElementById('cardYatraTitle').innerText = yatraName;
     document.getElementById('cardRoleBadge').innerText = (p.role || 'PILGRIM').toUpperCase();
@@ -207,7 +212,6 @@ function openProfileModal() {
     document.getElementById('cardEmergency').innerText = p.emergency_contact || 'Not Set';
     document.getElementById('cardAddress').innerText = p.address || 'Not Set';
 
-    // Complete Profile Edit Form Inputs Pre-fill
     const nameInput = document.getElementById('profileFullNameInput');
     const mobileInput = document.getElementById('profileMobileInput');
     const bloodInput = document.getElementById('profileBloodGroupInput');
@@ -217,7 +221,6 @@ function openProfileModal() {
     document.getElementById('profileEmergencyInput').value = p.emergency_contact || '';
     document.getElementById('profileAddressInput').value = p.address || '';
 
-    // Hide "Complete Yatra" button if user is on Home Gate
     const completeBtn = document.getElementById('btnCompleteYatra');
     if (completeBtn) {
         completeBtn.style.display = window.activeYatra ? 'block' : 'none';
@@ -230,7 +233,6 @@ function openProfileModal() {
         document.getElementById('startCamBtn').innerText = "🔄 दूसरी सेल्फी लें";
     }
 
-    // Dynamic QR Code Generate
     const qrBox = document.getElementById('qrcodeBox');
     if (qrBox && typeof QRCode !== 'undefined') {
         qrBox.innerHTML = '';
@@ -245,7 +247,6 @@ function openProfileModal() {
         });
     }
 
-    // Journey History Render
     const hist = Array.isArray(p.journey_history) ? p.journey_history : [];
     document.getElementById('journeyHistoryBox').innerHTML = `<b>📜 पूर्ण की गई यात्राएं (${hist.length}):</b><br>` +
         (hist.length ? hist.map(h => `✅ ${h.yatra_name} (${h.date})`).join('<br>') : 'अभी तक कोई यात्रा पूर्ण नहीं हुई है।');
@@ -293,7 +294,6 @@ async function saveCompleteProfile() {
     window.currentProfile = data;
     capturedSelfieBase64 = null;
 
-    // Home Gate button par bhi naya naam update karein
     const gateProfileBtn = document.getElementById('gateProfileBtn');
     if (gateProfileBtn) {
         const firstName = (data.full_name || 'Profile').split(' ')[0];
@@ -304,7 +304,6 @@ async function saveCompleteProfile() {
     openProfileModal();
 }
 
-// Backward compatibility alias
 async function saveProfileExtras() {
     return saveCompleteProfile();
 }
@@ -347,32 +346,125 @@ async function completeCurrentYatra() {
     backToYatraGate();
 }
 
-// 7. Geo-Fenced Smart SOS (Strictly Linked to Active Yatra)
+// =========================================================
+// 7. GEO-FENCED SMART SOS (ONLY REGISTERED / LOGGED-IN USERS)
+// =========================================================
 function openSOSModal() {
+    if (!window.currentUser) {
+        alert("🔒 SOS आपातकालीन सहायता का उपयोग करने के लिए कृपया पहले लॉगिन या रजिस्टर करें।");
+        openAuthModal();
+        return;
+    }
     if (!window.activeYatra) return;
-    document.getElementById('sosYatraName').innerText = window.activeYatra.name;
+    document.getElementById('sosYatraName').innerText = window.activeYatra.name_hi || window.activeYatra.name;
     showModal('sosModal');
 }
 
+async function insertSosRecord(helpType, lat, lng) {
+    const userName = (window.currentProfile && window.currentProfile.full_name) || window.currentUser.email;
+    const userMobile = (window.currentProfile && window.currentProfile.mobile) || 'N/A';
+
+    const { error } = await supabaseClient.from('sos_alerts').insert([{
+        user_id: window.currentUser.id,
+        user_name: userName,
+        user_mobile: userMobile,
+        yatra_id: window.activeYatra.id,
+        help_type: helpType,
+        lat: lat,
+        lng: lng
+    }]);
+
+    if (error) {
+        alert("SOS Error: " + error.message);
+        return;
+    }
+
+    closeAllModals();
+    alert(`🚨 SOS भेज दिया गया है!\n${window.activeYatra.name_hi || window.activeYatra.name} के नजदीकी सेवादारों को आपकी लोकेशन और नंबर मिल गया है।`);
+}
+
 function triggerSOS(helpType) {
-    if (!navigator.geolocation) return alert("आपके डिवाइस में GPS उपलब्ध नहीं है।");
+    if (!window.currentUser) {
+        alert("🔒 कृपया पहले लॉगिन करें।");
+        openAuthModal();
+        return;
+    }
+    if (!window.activeYatra) return;
 
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-        const { error } = await supabaseClient.from('sos_alerts').insert([{
-            user_id: window.currentUser ? window.currentUser.id : null,
-            user_name: window.currentProfile ? window.currentProfile.full_name : 'Guest Yatri',
-            user_mobile: window.currentProfile ? window.currentProfile.mobile : 'N/A',
-            yatra_id: window.activeYatra.id,
-            help_type: helpType,
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude
-        }]);
+    const fallbackLat = window.yatriLiveCoords?.lat || window.activeYatra.center_lat || 0;
+    const fallbackLng = window.yatriLiveCoords?.lng || window.activeYatra.center_lng || 0;
 
-        if (error) return alert("SOS Error: " + error.message);
+    if (!navigator.geolocation) {
+        insertSosRecord(helpType, fallbackLat, fallbackLng);
+        return;
+    }
 
-        closeAllModals();
-        alert(`🚨 SOS भेज दिया गया है! ${window.activeYatra.name} के नजदीकी सेवादारों को आपकी लोकेशन मिल गई है।`);
-    }, () => {
-        alert("GPS लोकेशन नहीं मिल सकी। कृपया लोकेशन परमिशन चालू करें।");
-    });
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            insertSosRecord(helpType, pos.coords.latitude, pos.coords.longitude);
+        },
+        () => {
+            // GPS सिग्नल न मिलने पर भी लॉगिन यूज़र का SOS मैप लोकेशन से चला जाएगा
+            insertSosRecord(helpType, fallbackLat, fallbackLng);
+        },
+        { enableHighAccuracy: true, timeout: 6000 }
+    );
+}
+
+// =========================================================
+// 8. LIVE SOS NOTIFICATION POPUP FOR ADMIN & SEVADARS
+// =========================================================
+let sosRealtimeChannel = null;
+
+function playSosBeep() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.connect(ctx.destination);
+        osc.start();
+        setTimeout(() => { osc.stop(); ctx.close(); }, 400);
+    } catch (e) {}
+}
+
+function showIncomingSosBanner(sos) {
+    playSosBeep();
+    let box = document.getElementById('liveSosAlertBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'liveSosAlertBox';
+        box.style.cssText = 'position:fixed; top:14px; right:14px; z-index:99999; background:#b71c1c; color:#fff; padding:14px 16px; border-radius:12px; box-shadow:0 8px 25px rgba(0,0,0,0.45); max-width:340px; width:90%; border:2px solid #ffcdd2; font-family:sans-serif;';
+        document.body.appendChild(box);
+    }
+
+    const mapUrl = `https://www.google.com/maps?q=${sos.lat},${sos.lng}`;
+    box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <b style="font-size:15px;">🚨 नया SOS अलर्ट!</b>
+            <button onclick="document.getElementById('liveSosAlertBox').remove()" style="background:rgba(255,255,255,0.2); border:none; color:#fff; border-radius:6px; padding:2px 8px; cursor:pointer; font-weight:bold;">✖</button>
+        </div>
+        <div style="font-size:13px; line-height:1.5;">
+            <div><b>सहायता:</b> ${sos.help_type || 'Emergency'}</div>
+            <div><b>यात्री:</b> ${sos.user_name || 'Registered Yatri'}</div>
+            <div><b>मोबाइल:</b> <a href="tel:${sos.user_mobile}" style="color:#ffeb3b; font-weight:bold;">${sos.user_mobile || 'N/A'}</a></div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+            <a href="tel:${sos.user_mobile}" style="flex:1; text-align:center; background:#2e7d32; color:#fff; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📞 कॉल करें</a>
+            <a href="${mapUrl}" target="_blank" style="flex:1; text-align:center; background:#fff; color:#b71c1c; text-decoration:none; padding:7px; border-radius:6px; font-weight:bold; font-size:12px;">📍 लोकेशन देखें</a>
+        </div>
+    `;
+}
+
+function startLiveSosListener() {
+    if (sosRealtimeChannel) return;
+
+    sosRealtimeChannel = supabaseClient
+        .channel('public:sos_alerts')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sos_alerts' }, (payload) => {
+            if (payload && payload.new) {
+                showIncomingSosBanner(payload.new);
+            }
+        })
+        .subscribe();
 }
