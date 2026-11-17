@@ -380,7 +380,25 @@ async function insertSosRecord(helpType, lat, lng) {
     }
 
     closeAllModals();
-    alert(`🚨 SOS भेज दिया गया है!\n${window.activeYatra.name_hi || window.activeYatra.name} के नजदीकी सेवादारों को आपकी लोकेशन और नंबर मिल गया है।`);
+
+    // Yatri ko confirmation + WhatsApp par turant location bhejne ka option
+    const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+    const waText = encodeURIComponent(
+        `🚨 *PARIKRAMAPATH SOS ALERT*\n` +
+        `यात्रा: ${window.activeYatra.name_hi || window.activeYatra.name}\n` +
+        `सहायता: ${helpType}\n` +
+        `नाम: ${userName}\n` +
+        `मोबाइल: ${userMobile}\n` +
+        `📍 लोकेशन: ${mapUrl}`
+    );
+
+    const sendWa = confirm(
+        `🚨 SOS पोर्टल पर दर्ज हो गया है!\n\n` +
+        `क्या आप तुरंत WhatsApp पर भी अपनी लाइव लोकेशन सेवादार / परिवार को भेजना चाहते हैं?`
+    );
+    if (sendWa) {
+        window.open(`https://wa.me/?text=${waText}`, '_blank');
+    }
 }
 
 function triggerSOS(helpType) {
@@ -404,7 +422,6 @@ function triggerSOS(helpType) {
             insertSosRecord(helpType, pos.coords.latitude, pos.coords.longitude);
         },
         () => {
-            // GPS सिग्नल न मिलने पर भी लॉगिन यूज़र का SOS मैप लोकेशन से चला जाएगा
             insertSosRecord(helpType, fallbackLat, fallbackLng);
         },
         { enableHighAccuracy: true, timeout: 6000 }
@@ -424,7 +441,7 @@ function playSosBeep() {
         osc.frequency.setValueAtTime(880, ctx.currentTime);
         osc.connect(ctx.destination);
         osc.start();
-        setTimeout(() => { osc.stop(); ctx.close(); }, 400);
+        setTimeout(() => { osc.stop(); ctx.close(); }, 450);
     } catch (e) {}
 }
 
@@ -439,9 +456,11 @@ function showIncomingSosBanner(sos) {
     }
 
     const mapUrl = `https://www.google.com/maps?q=${sos.lat},${sos.lng}`;
+    const timeStr = sos.created_at ? new Date(sos.created_at).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }) : 'अभी';
+
     box.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <b style="font-size:15px;">🚨 नया SOS अलर्ट!</b>
+            <b style="font-size:15px;">🚨 SOS अलर्ट (${timeStr})</b>
             <button onclick="document.getElementById('liveSosAlertBox').remove()" style="background:rgba(255,255,255,0.2); border:none; color:#fff; border-radius:6px; padding:2px 8px; cursor:pointer; font-weight:bold;">✖</button>
         </div>
         <div style="font-size:13px; line-height:1.5;">
@@ -456,9 +475,23 @@ function showIncomingSosBanner(sos) {
     `;
 }
 
-function startLiveSosListener() {
+async function startLiveSosListener() {
     if (sosRealtimeChannel) return;
 
+    // 1. Pichhle 30 minute ka koi taza SOS ho to turant dikhayein
+    const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const { data: recentSos } = await supabaseClient
+        .from('sos_alerts')
+        .select('*')
+        .gte('created_at', thirtyMinsAgo)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+    if (recentSos && recentSos.length > 0) {
+        showIncomingSosBanner(recentSos[0]);
+    }
+
+    // 2. Naye SOS ke liye Realtime channel subscribe karein
     sosRealtimeChannel = supabaseClient
         .channel('public:sos_alerts')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sos_alerts' }, (payload) => {
