@@ -152,6 +152,7 @@ async function applyUserSession(user) {
 
     const cleanRole = (window.currentProfile.role || '').toLowerCase().trim().replace(/\s+/g, '_');
     const isAdminOrMod = (cleanRole === 'super_admin' || cleanRole === 'admin' || cleanRole === 'moderator');
+    const isStrictAdmin = (cleanRole === 'super_admin' || cleanRole === 'admin');
     const isStaff = isAdminOrMod || (cleanRole === 'supporter' && window.currentProfile.status === 'approved');
 
     // Home Gate (Gate 1) buttons update
@@ -184,6 +185,14 @@ async function applyUserSession(user) {
     // Admin aur Sevadar ke liye Live SOS Listener chalu karein
     if (isStaff) {
         startLiveSosListener();
+    }
+
+    // Active yatri ki live location broadcast aur sirf super_admin/admin ke liye live tracker
+    if (typeof startYatriLocationBroadcast === 'function') {
+        startYatriLocationBroadcast();
+    }
+    if (isStrictAdmin && typeof initAdminLiveYatriTracker === 'function') {
+        initAdminLiveYatriTracker();
     }
 
     // Profile load hote hi map markers par Admin/User Edit buttons refresh karein
