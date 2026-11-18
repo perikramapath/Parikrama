@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - CUSTOM ROUTE & REAL ROAD DISTANCE (NO AIR DISTANCE)
+// PARIKRAMAPATH - LIVE GPS ROUTE HUD, AUTO-ADVANCE & BRANCH PRUNING
 // =========================================================
 
 window.map = null;
@@ -13,14 +13,18 @@ window.padavMarkersMap = {};
 window.adminYatriMarkersMap = {};
 window.osrmGeometryCache = {};
 window.osrmDistanceCache = {};
+window.focusedOriginPadavId = null;
 
-// Live Yatri GPS Tracking & 500m Auto-Hide
+// Live Yatri GPS Tracking, 500m Auto-Hide & Branch Selection
 window.yatriLiveCoords = null;
 window.yatriLiveMarker = null;
 window.passedPadavIds = new Set();
+window.abandonedBranchIds = new Set();
+window.activeLiveNavLeg = null;
 window.isPickingEditLocation = false;
 window.hasCenteredOnLiveGps = false;
 window.lastDbLocationPingMs = 0;
+window.lastLiveNavCalcMs = 0;
 window.adminYatriRealtimeSub = null;
 window.adminVisitorRealtimeSub = null;
 
@@ -73,9 +77,12 @@ window.setManualStartPadav = function(padavId) {
     if (!found) return;
 
     window.selectedStartPadav = found;
+    window.focusedOriginPadavId = found.id;
+    window.passedPadavIds.delete(found.id);
+    window.abandonedBranchIds.delete(found.id);
     saveUserStartPadavLocal(window.activeYatra, found);
     renderIsolatedPadavs(window.activeYatraPadavs);
-    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है। अब आपकी लाइव लोकेशन के अनुसार इसी तट के आगे के पड़ाव दिखते रहेंगे।`);
+    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है।`);
 };
 
 // ---------------------------------------------------------
@@ -201,22 +208,65 @@ function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
     return null;
 }
 
+// Live GPS se kisi target padav tak ki remaining road distance (custom route par ya OSRM par)
+function getRemainingCustomRouteKmFromLiveGps(uLat, uLng, targetPadav) {
+    const routes = window.activeCustomRoutes || [];
+    const snapToleranceMeters = 550;
+
+    for (const r of routes) {
+        const coords = r.coordinates;
+        if (!Array.isArray(coords) || coords.length < 2) continue;
+
+        let userIdx = -1;
+        let targetIdx = -1;
+        let bestUserDist = snapToleranceMeters;
+        let bestTargetDist = 450;
+
+        for (let i = 0; i < coords.length; i++) {
+            const pt = coords[i];
+            if (!Array.isArray(pt) || pt.length < 2) continue;
+
+            const dUser = getDistanceInMeters(uLat, uLng, pt[0], pt[1]);
+            if (dUser <= bestUserDist) {
+                bestUserDist = dUser;
+                userIdx = i;
+            }
+            const dTarget = getDistanceInMeters(targetPadav.lat, targetPadav.lng, pt[0], pt[1]);
+            if (dTarget <= bestTargetDist) {
+                bestTargetDist = dTarget;
+                targetIdx = i;
+            }
+        }
+
+        if (userIdx !== -1 && targetIdx !== -1 && userIdx !== targetIdx) {
+            const from = Math.min(userIdx, targetIdx);
+            const to = Math.max(userIdx, targetIdx);
+            let totalMeters = 0;
+            for (let j = from; j < to; j++) {
+                totalMeters += getDistanceInMeters(
+                    coords[j][0], coords[j][1],
+                    coords[j + 1][0], coords[j + 1][1]
+                );
+            }
+            return parseFloat((totalMeters / 1000).toFixed(1));
+        }
+    }
+    return null;
+}
+
 function getResolvedPathKmSync(fromPadav, toPadav, savedKm, routeIdx = 0) {
     if (!fromPadav || !toPadav) return savedKm || null;
 
-    // 1. Pehle apni draw ki hui custom line se exact KM check karein
     const customKm = getCustomRouteKmBetween(fromPadav.lat, fromPadav.lng, toPadav.lat, toPadav.lng);
     if (customKm !== null && customKm > 0) {
         return customKm;
     }
 
-    // 2. OSRM real road distance cache check karein
     const cacheKey = `${fromPadav.id}_${toPadav.id}_${routeIdx}`;
     if (window.osrmDistanceCache[cacheKey]) {
         return window.osrmDistanceCache[cacheKey];
     }
 
-    // 3. Agar pehle se valid saved road km hai to use rakhein (kabhi hawa ka km calculate nahi karega)
     if (savedKm && parseFloat(savedKm) > 0) {
         return parseFloat(savedKm);
     }
@@ -251,7 +301,6 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
                 window.osrmGeometryCache[cacheKey] = latLngs;
             }
 
-            // Popup agar khula hai to usme live road km span update kar dein
             const spanEl = document.getElementById(`km_badge_${fromPadav.id}_${toPadav.id}_${routeIdx}`);
             if (spanEl) {
                 spanEl.innerText = `${roadKm} km`;
@@ -285,9 +334,9 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
     }
     const manualList = Array.isArray(rawNext) ? rawNext : [];
 
-    // 1. Narmada Parikrama me manual list se bhi sirf SAME TAT (sub_route) ke padav filter karein
     if (isNarmadaParikrama) {
         const sameTatManual = manualList.filter(np => {
+            if (window.abandonedBranchIds.has(np.id)) return false;
             const targetObj = (window.activeYatraPadavs || []).find(item => String(item.id) === String(np.id));
             if (!targetObj) return false;
             return isSameNarmadaTat(p, targetObj);
@@ -297,7 +346,6 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
             return { list: sameTatManual, isAuto: false };
         }
 
-        // 2. Agar manual next_padavs khali hai, to SAME TAT ke agle padav parikrama disha ke hisab se auto-sync karein
         const tatName = normalizeTatLabel(p.sub_route);
         const isUttarTat = tatName.includes('उत्तर') || tatName.includes('uttar') || tatName.includes('north');
         const isDakshinTat = tatName.includes('दक्षिण') || tatName.includes('dakshin') || tatName.includes('south');
@@ -306,6 +354,7 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
             .filter(other => {
                 if (String(other.id) === String(p.id)) return false;
                 if (window.passedPadavIds.has(other.id)) return false;
+                if (window.abandonedBranchIds.has(other.id)) return false;
                 if (!other.lat || !other.lng) return false;
                 if (!isSameNarmadaTat(p, other)) return false;
 
@@ -315,7 +364,6 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
             })
             .map(other => {
                 const knownKm = getResolvedPathKmSync(p, other, null, 0);
-                // Ordering ke liye keval internal sort key rakhte hain, display ke liye hawa ka km kabhi nahi dikhate
                 const sortOrderMetric = knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng);
                 return {
                     id: other.id,
@@ -326,19 +374,19 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
                 };
             })
             .sort((a, b) => a._sortMetric - b._sortMetric)
-            .slice(0, 2);
+            .slice(0, 1);
 
         return { list: sameTatCandidates, isAuto: true };
     }
 
-    // Anya Yatraon ke liye
-    if (manualList.length > 0) {
-        return { list: manualList, isAuto: false };
+    const activeManual = manualList.filter(np => !window.abandonedBranchIds.has(np.id));
+    if (activeManual.length > 0) {
+        return { list: activeManual, isAuto: false };
     }
 
     if ((window.activeYatraPadavs || []).length > 1) {
         const autoOther = window.activeYatraPadavs
-            .filter(other => other.id !== p.id && !window.passedPadavIds.has(other.id) && (!p.sub_route || !other.sub_route || other.sub_route === p.sub_route))
+            .filter(other => other.id !== p.id && !window.passedPadavIds.has(other.id) && !window.abandonedBranchIds.has(other.id) && (!p.sub_route || !other.sub_route || other.sub_route === p.sub_route))
             .map(other => {
                 const knownKm = getResolvedPathKmSync(p, other, null, 0);
                 const sortOrderMetric = knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng);
@@ -351,11 +399,55 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
                 };
             })
             .sort((a, b) => a._sortMetric - b._sortMetric)
-            .slice(0, 2);
+            .slice(0, 1);
         return { list: autoOther, isAuto: true };
     }
 
     return { list: [], isAuto: false };
+}
+
+// =========================================================
+// LIVE ROUTE NAVIGATION BAR (HUD) - UPDATES AS YATRI WALKS
+// =========================================================
+function updateLiveNavigationHud(originPadav, targetEntries) {
+    let hud = document.getElementById('liveYatraNavHud');
+    if (!originPadav || !Array.isArray(targetEntries) || targetEntries.length === 0) {
+        if (hud) hud.style.display = 'none';
+        return;
+    }
+
+    if (!hud) {
+        hud = document.createElement('div');
+        hud.id = 'liveYatraNavHud';
+        hud.style.cssText = 'position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:9997; background:rgba(21, 101, 192, 0.96); color:#fff; padding:9px 14px; border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.4); max-width:92%; width:360px; font-family:sans-serif; font-size:12.5px; border:1.5px solid #bbdefb;';
+        document.body.appendChild(hud);
+    }
+
+    hud.style.display = 'block';
+
+    const rowsHtml = targetEntries.map((item, idx) => {
+        const kmStr = item.liveKm !== null && item.liveKm !== undefined
+            ? `<b>${item.liveKm} km</b>`
+            : '<span>दूरी लोड...</span>';
+        const prefix = targetEntries.length > 1 ? `विकल्प ${idx + 1}: ` : '➡️ अगला पड़ाव: ';
+        return `
+            <div style="display:flex; justify-content:space-between; align-items:center; ${idx > 0 ? 'margin-top:4px; padding-top:4px; border-top:1px dashed rgba(255,255,255,0.35);' : ''}">
+                <span onclick="focusOnPadav('${item.target.id}')" style="cursor:pointer; text-decoration:underline; font-weight:bold; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px;">
+                    ${prefix}${item.target.name}
+                </span>
+                <span id="hud_live_km_${item.target.id}" style="background:#ffeb3b; color:#0d47a1; padding:2px 7px; border-radius:6px; font-size:12px; white-space:nowrap;">
+                    ${kmStr}
+                </span>
+            </div>
+        `;
+    }).join('');
+
+    hud.innerHTML = `
+        <div style="font-size:11px; color:#bbdefb; margin-bottom:3px;">
+            🚩 वर्तमान चरण: <b>${originPadav.name}</b>
+        </div>
+        ${rowsHtml}
+    `;
 }
 
 // =========================================================
@@ -402,8 +494,10 @@ window.locateMyCurrentPosition = function() {
             if (btn) btn.innerText = '🎯';
             const lat = pos.coords.latitude;
             const lng = pos.coords.longitude;
+            window.focusedOriginPadavId = null;
             updateMyBlueLocationDot(lat, lng, true);
             await syncYatriLiveLocationToDb(lat, lng, true);
+            applyMapFilters();
         },
         (err) => {
             if (btn) btn.innerText = '🎯';
@@ -635,7 +729,11 @@ function openPadavDetailsModal(padavId) {
 }
 
 // =========================================================
-// YATRI LIVE PROGRESS TRACKER (TAT-AWARE 500M AUTO-HIDE)
+// YATRI LIVE PROGRESS TRACKER:
+// 1) A -> B LINE FROM STARTING POINT
+// 2) CROSSING 500M HIDES A & AUTO-SWITCHES TO B -> C
+// 3) BRANCHING: SHOWS ALL NEXT PADAVS, HIDES OTHER BRANCH ON COMMIT
+// 4) CONTINUOUS LIVE DISTANCE UPDATE WHILE WALKING
 // =========================================================
 function startYatriLiveProgressTracker() {
     if (!navigator.geolocation) return;
@@ -658,38 +756,84 @@ function startYatriLiveProgressTracker() {
             window.map.setView([uLat, uLng], 13);
         }
 
-        if (isUserAdminOrMod()) return;
-
         let statusChanged = false;
-        (window.activeYatraPadavs || []).forEach(p => {
-            if (window.passedPadavIds.has(p.id)) return;
-            const distFromPadav = getDistanceInMeters(uLat, uLng, p.lat, p.lng);
 
-            if (distFromPadav > 500) {
-                const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
-                const nextArr = synced.list;
+        // 1. 500m aage badhne par pichhla padav automatic hide karein
+        if (!isUserAdminOrMod()) {
+            (window.activeYatraPadavs || []).forEach(p => {
+                if (window.passedPadavIds.has(p.id)) return;
+                const distFromPadav = getDistanceInMeters(uLat, uLng, p.lat, p.lng);
 
-                if (Array.isArray(nextArr) && nextArr.length > 0) {
-                    const targetObj = window.activeYatraPadavs.find(x => String(x.id) === String(nextArr[0].id));
-                    if (targetObj) {
-                        const totalSpan = getDistanceInMeters(p.lat, p.lng, targetObj.lat, targetObj.lng);
-                        const distToNext = getDistanceInMeters(uLat, uLng, targetObj.lat, targetObj.lng);
-                        if (distToNext < totalSpan) {
+                if (distFromPadav > 500) {
+                    const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
+                    const nextArr = synced.list;
+
+                    if (Array.isArray(nextArr) && nextArr.length > 0) {
+                        // Agar kisi bhi agale padav ki disha me badh gaye hain to pichhla padav hide karein
+                        const movedTowardAnyNext = nextArr.some(np => {
+                            const targetObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
+                            if (!targetObj) return false;
+                            const totalSpan = getDistanceInMeters(p.lat, p.lng, targetObj.lat, targetObj.lng);
+                            const distToNext = getDistanceInMeters(uLat, uLng, targetObj.lat, targetObj.lng);
+                            return distToNext < (totalSpan - 150);
+                        });
+
+                        if (movedTowardAnyNext) {
                             window.passedPadavIds.add(p.id);
+                            if (String(window.focusedOriginPadavId) === String(p.id)) {
+                                window.focusedOriginPadavId = null;
+                            }
                             statusChanged = true;
-                        }
-                    }
-                } else if (window.selectedStartPadav && String(window.selectedStartPadav.id) === String(p.id)) {
-                    window.passedPadavIds.add(p.id);
-                    statusChanged = true;
-                }
-            }
-        });
 
-        if (statusChanged) applyMapFilters();
+                            // 2. Branch Pruning: Agar ek se adhik agale padav the aur yatri kisi ek ki taraf
+                            // 450m se zyada badh gaya hai to dusare route/padav ko hide kar dein
+                            if (nextArr.length > 1) {
+                                const branchProgress = nextArr.map(np => {
+                                    const tObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
+                                    if (!tObj) return null;
+                                    const span = getDistanceInMeters(p.lat, p.lng, tObj.lat, tObj.lng);
+                                    const rem = getDistanceInMeters(uLat, uLng, tObj.lat, tObj.lng);
+                                    return { id: tObj.id, gainedMeters: span - rem };
+                                }).filter(Boolean);
+
+                                if (branchProgress.length > 1) {
+                                    branchProgress.sort((a, b) => b.gainedMeters - a.gainedMeters);
+                                    const chosen = branchProgress[0];
+                                    const runnerUp = branchProgress[1];
+                                    // Jab ek branch par kam se kam 450m aage nikal jayein aur dusare se 350m+ aage hon
+                                    if (chosen.gainedMeters > 450 && (chosen.gainedMeters - runnerUp.gainedMeters) > 350) {
+                                        for (let k = 1; k < branchProgress.length; k++) {
+                                            window.abandonedBranchIds.add(branchProgress[k].id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (window.selectedStartPadav && String(window.selectedStartPadav.id) === String(p.id)) {
+                        window.passedPadavIds.add(p.id);
+                        statusChanged = true;
+                    }
+                }
+            });
+        }
+
+        if (statusChanged) {
+            applyMapFilters();
+        } else {
+            // Chalne par bina click ke live line aur bachi hui duri lagatar update karein
+            const subVal = document.getElementById('subRouteFilter')?.value || 'all';
+            const catVal = document.getElementById('categoryFilter')?.value || 'all';
+            const currentVisible = (window.activeYatraPadavs || []).filter(p =>
+                (isUserAdminOrMod() || !window.passedPadavIds.has(p.id)) &&
+                !window.abandonedBranchIds.has(p.id) &&
+                (subVal === 'all' || p.sub_route === subVal) &&
+                (catVal === 'all' || p.category === catVal)
+            );
+            drawAutoPadavConnectingLines(currentVisible);
+        }
     }, err => {
         console.warn("Live GPS tracking paused:", err.message);
-    }, { enableHighAccuracy: true, maximumAge: 10000 });
+    }, { enableHighAccuracy: true, maximumAge: 5000 });
 }
 
 async function initAndLoadIsolatedMap() {
@@ -705,6 +849,7 @@ async function initAndLoadIsolatedMap() {
     }
 
     window.hasCenteredOnLiveGps = false;
+    window.focusedOriginPadavId = null;
 
     const initialLat = window.yatriLiveCoords?.lat
         || (window.selectedStartPadav ? window.selectedStartPadav.lat : window.activeYatra.center_lat);
@@ -816,71 +961,188 @@ async function initAndLoadIsolatedMap() {
     }
 }
 
+// =========================================================
+// ACTIVE PADAV RESOLVER (START -> A -> B -> C AUTO-PROGRESSION)
+// =========================================================
+function resolveSingleActiveOriginPadav(visibleList) {
+    if (!Array.isArray(visibleList) || visibleList.length === 0) return null;
+
+    if (window.focusedOriginPadavId) {
+        const clicked = visibleList.find(p => String(p.id) === String(window.focusedOriginPadavId));
+        if (clicked) return clicked;
+    }
+
+    // 1. Agar starting padav abhi tak 500m cross nahi hua hai to wahi origin rahega (A -> B line)
+    if (window.selectedStartPadav && !window.passedPadavIds.has(window.selectedStartPadav.id)) {
+        const startMatch = visibleList.find(p => String(p.id) === String(window.selectedStartPadav.id));
+        if (startMatch) return startMatch;
+    }
+
+    // 2. Starting padav cross hone ke baad live GPS ke sabse nazdeeki active padav (B -> C line)
+    if (window.yatriLiveCoords && window.yatriLiveCoords.lat && window.yatriLiveCoords.lng) {
+        let nearest = null;
+        let bestDist = Infinity;
+        for (const p of visibleList) {
+            if (!p.lat || !p.lng) continue;
+            const d = getDistanceInMeters(window.yatriLiveCoords.lat, window.yatriLiveCoords.lng, p.lat, p.lng);
+            if (d < bestDist) {
+                bestDist = d;
+                nearest = p;
+            }
+        }
+        if (nearest) return nearest;
+    }
+
+    return visibleList[0];
+}
+
 async function drawAutoPadavConnectingLines(visibleList) {
     if (!window.autoPadavLinkLayer) return;
-    window.autoPadavLinkLayer.clearLayers();
-
-    const primaryColor = window.activeYatra?.theme_color || '#d84315';
-    const altRouteColors = ['#1565c0', '#2e7d32', '#6a1b9a'];
 
     const yatraSlug = (window.activeYatra?.slug || '').toLowerCase();
     const yatraName = (window.activeYatra?.name || '').toLowerCase();
     const isNarmadaParikrama = yatraSlug.includes('narmada') || yatraName.includes('narmada');
 
-    for (const p of visibleList) {
-        if (!p.lat || !p.lng) continue;
+    const currentOriginPadav = resolveSingleActiveOriginPadav(visibleList);
+    if (!currentOriginPadav || !currentOriginPadav.lat || !currentOriginPadav.lng) {
+        window.autoPadavLinkLayer.clearLayers();
+        updateLiveNavigationHud(null, []);
+        return;
+    }
 
-        const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
-        const nextPadavsArr = synced.list;
-        if (!Array.isArray(nextPadavsArr) || nextPadavsArr.length === 0) continue;
+    const synced = getSyncedNextPadavsForPadav(currentOriginPadav, isNarmadaParikrama);
+    const nextPadavsArr = synced.list;
+    if (!Array.isArray(nextPadavsArr) || nextPadavsArr.length === 0) {
+        window.autoPadavLinkLayer.clearLayers();
+        updateLiveNavigationHud(null, []);
+        return;
+    }
 
-        for (let i = 0; i < nextPadavsArr.length; i++) {
-            const np = nextPadavsArr[i];
+    const branchColors = ['#1565c0', '#2e7d32', '#6a1b9a'];
+    const hudEntries = [];
+    const now = Date.now();
+    const shouldQueryLiveOsrm = (now - window.lastLiveNavCalcMs) > 10000;
+    if (shouldQueryLiveOsrm) window.lastLiveNavCalcMs = now;
+
+    // Ek se adhik agale padav hain to sabhi branches dikhayein (abandoned branches pehle hi filter ho chuki hain)
+    const validTargets = nextPadavsArr
+        .map((np, idx) => {
             const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
-            if (!targetP || !targetP.lat || !targetP.lng) continue;
+            if (!targetP || !targetP.lat || !targetP.lng) return null;
+            if (isNarmadaParikrama && !isSameNarmadaTat(currentOriginPadav, targetP)) return null;
+            return { np, targetP, idx };
+        })
+        .filter(Boolean);
 
-            if (isNarmadaParikrama && !isSameNarmadaTat(p, targetP)) {
+    if (validTargets.length === 0) {
+        window.autoPadavLinkLayer.clearLayers();
+        updateLiveNavigationHud(null, []);
+        return;
+    }
+
+    window.autoPadavLinkLayer.clearLayers();
+
+    for (const item of validTargets) {
+        const { np, targetP, idx } = item;
+        const lineColor = branchColors[idx % branchColors.length];
+        const hasLiveGps = !!(window.yatriLiveCoords && window.yatriLiveCoords.lat && window.yatriLiveCoords.lng);
+
+        // 1. Live remaining KM calculate karein (Custom Drawn Line -> Live OSRM -> Padav-to-Padav Road KM)
+        let liveRemainingKm = null;
+        if (hasLiveGps) {
+            liveRemainingKm = getRemainingCustomRouteKmFromLiveGps(
+                window.yatriLiveCoords.lat,
+                window.yatriLiveCoords.lng,
+                targetP
+            );
+        }
+        if (liveRemainingKm === null) {
+            liveRemainingKm = getResolvedPathKmSync(currentOriginPadav, targetP, np.km, idx);
+        }
+
+        hudEntries.push({ target: targetP, liveKm: liveRemainingKm });
+
+        const hasCustomLine = hasCustomDrawnRouteBetween(
+            currentOriginPadav.lat, currentOriginPadav.lng,
+            targetP.lat, targetP.lng
+        );
+
+        const buildTooltip = (kmValue) => {
+            const kmText = kmValue ? ` • <b>${kmValue} km शेष (सड़क मार्ग)</b>` : '';
+            const branchTag = validTargets.length > 1 ? `<b>[विकल्प ${idx + 1}]</b> ` : '';
+            return `${branchTag}<b>➡️ ${currentOriginPadav.name} ➔ ${targetP.name}</b><br><small>${np.path || currentOriginPadav.sub_route || 'परिक्रमा मार्ग'}${kmText}</small>`;
+        };
+
+        const dottedStyle = {
+            color: lineColor,
+            weight: 5,
+            opacity: 0.92,
+            dashArray: '8, 8'
+        };
+
+        // 2. Agar live GPS hai to user ki current position se target padav tak real-time dotted road line banayein
+        if (hasLiveGps) {
+            const liveCacheKey = `live_${targetP.id}`;
+            if (window.osrmGeometryCache[liveCacheKey] && !shouldQueryLiveOsrm) {
+                if (!hasCustomLine) {
+                    L.polyline(window.osrmGeometryCache[liveCacheKey], dottedStyle)
+                        .bindPopup(buildTooltip(window.osrmDistanceCache[liveCacheKey] || liveRemainingKm))
+                        .addTo(window.autoPadavLinkLayer);
+                }
+                const hudBadge = document.getElementById(`hud_live_km_${targetP.id}`);
+                if (hudBadge && window.osrmDistanceCache[liveCacheKey]) {
+                    hudBadge.innerHTML = `<b>${window.osrmDistanceCache[liveCacheKey]} km</b>`;
+                }
                 continue;
             }
 
-            // Agar in do padavon ke beech custom line draw ki gayi hai to auto road line skip karein
-            if (hasCustomDrawnRouteBetween(p.lat, p.lng, targetP.lat, targetP.lng)) {
-                continue;
-            }
+            try {
+                const url = `https://router.project-osrm.org/route/v1/driving/${window.yatriLiveCoords.lng},${window.yatriLiveCoords.lat};${targetP.lng},${targetP.lat}?overview=full&geometries=geojson`;
+                const res = await fetch(url);
+                const data = await res.json();
 
-            const isAlternateRoute = (i > 0);
-            const routeColor = isAlternateRoute ? altRouteColors[(i - 1) % altRouteColors.length] : primaryColor;
-            const routeBadge = nextPadavsArr.length > 1 ? `<b>[विकल्प मार्ग ${i + 1}]</b> ` : '';
-            const cacheKey = `${p.id}_${targetP.id}_${i}`;
+                if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+                    const liveRoadKm = parseFloat((data.routes[0].distance / 1000).toFixed(1));
+                    const finalKm = getRemainingCustomRouteKmFromLiveGps(window.yatriLiveCoords.lat, window.yatriLiveCoords.lng, targetP) || liveRoadKm;
+                    window.osrmDistanceCache[liveCacheKey] = finalKm;
 
-            const buildTooltip = (kmValue) => {
-                const kmText = kmValue ? ` • <b>${kmValue} km (सड़क मार्ग)</b>` : '';
-                return `${routeBadge}<b>${p.name} ➡️ ${targetP.name}</b><br><small>${np.path || p.sub_route || 'परिक्रमा मार्ग'}${kmText}</small>`;
-            };
+                    const latLngs = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                    window.osrmGeometryCache[liveCacheKey] = latLngs;
 
-            const lineOptions = {
-                color: routeColor,
-                weight: isAlternateRoute ? 4 : 5,
-                opacity: 0.88,
-                dashArray: isAlternateRoute ? '8, 6' : null
-            };
+                    if (!hasCustomLine) {
+                        L.polyline(latLngs, dottedStyle)
+                            .bindPopup(buildTooltip(finalKm))
+                            .addTo(window.autoPadavLinkLayer);
+                    }
 
-            if (window.osrmGeometryCache[cacheKey]) {
-                L.polyline(window.osrmGeometryCache[cacheKey], lineOptions)
-                    .bindPopup(buildTooltip(window.osrmDistanceCache[cacheKey] || np.km))
+                    const hudBadge = document.getElementById(`hud_live_km_${targetP.id}`);
+                    if (hudBadge) {
+                        hudBadge.innerHTML = `<b>${finalKm} km</b>`;
+                    }
+                    continue;
+                }
+            } catch (e) {}
+        }
+
+        // 3. Fallback: Origin padav se target padav tak OSRM road line (jab tak GPS fix na ho)
+        if (!hasCustomLine) {
+            const pairCacheKey = `${currentOriginPadav.id}_${targetP.id}_${idx}`;
+            if (window.osrmGeometryCache[pairCacheKey]) {
+                L.polyline(window.osrmGeometryCache[pairCacheKey], dottedStyle)
+                    .bindPopup(buildTooltip(window.osrmDistanceCache[pairCacheKey] || liveRemainingKm))
                     .addTo(window.autoPadavLinkLayer);
-                continue;
-            }
-
-            // OSRM se real road path aur road distance laayein (hawa ki line kabhi draw nahi hogi)
-            const roadKm = await fetchRealRoadKmAsync(p, targetP, i);
-            if (window.osrmGeometryCache[cacheKey]) {
-                L.polyline(window.osrmGeometryCache[cacheKey], lineOptions)
-                    .bindPopup(buildTooltip(roadKm || np.km))
-                    .addTo(window.autoPadavLinkLayer);
+            } else {
+                const roadKm = await fetchRealRoadKmAsync(currentOriginPadav, targetP, idx);
+                if (window.osrmGeometryCache[pairCacheKey]) {
+                    L.polyline(window.osrmGeometryCache[pairCacheKey], dottedStyle)
+                        .bindPopup(buildTooltip(roadKm || liveRemainingKm))
+                        .addTo(window.autoPadavLinkLayer);
+                }
             }
         }
     }
+
+    updateLiveNavigationHud(currentOriginPadav, hudEntries);
 }
 
 function renderIsolatedPadavs(list) {
@@ -894,7 +1156,7 @@ function renderIsolatedPadavs(list) {
 
     const visiblePadavs = adminMode
         ? list
-        : list.filter(p => !window.passedPadavIds.has(p.id));
+        : list.filter(p => !window.passedPadavIds.has(p.id) && !window.abandonedBranchIds.has(p.id));
 
     drawAutoPadavConnectingLines(visiblePadavs);
 
@@ -969,7 +1231,6 @@ function renderIsolatedPadavs(list) {
                 <p style="margin:3px 0; font-size:12px; color:#2e7d32;"><b>सुविधाएं:</b> ${amenities || 'सामान्य'}</p>
             `;
 
-        // TAT-SYNCED NEXT PADAVS (CUSTOM LINE OR REAL ROAD DISTANCE ONLY)
         const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
         const finalNextList = synced.list;
         const isAutoSuggested = synced.isAuto;
@@ -1002,7 +1263,6 @@ function renderIsolatedPadavs(list) {
                             }
                         }
 
-                        // Priority: 1. Custom Drawn Line KM -> 2. OSRM Road KM -> 3. Saved Road KM
                         const resolvedKm = targetP ? getResolvedPathKmSync(p, targetP, np.km, idx) : (np.km || null);
                         const kmSpanId = targetP ? `km_badge_${p.id}_${targetP.id}_${idx}` : '';
                         const kmLabel = resolvedKm ? `${resolvedKm} km` : 'सड़क दूरी लोड...';
@@ -1061,7 +1321,13 @@ function renderIsolatedPadavs(list) {
 
         const marker = L.marker([p.lat, p.lng], { icon }).bindPopup(popupHtml);
 
-        // Popup khulte hi agar custom line nahi hai to real road km live fetch karke badge update karein
+        marker.on('click', () => {
+            if (String(window.focusedOriginPadavId) !== String(p.id)) {
+                window.focusedOriginPadavId = p.id;
+                drawAutoPadavConnectingLines(visiblePadavs);
+            }
+        });
+
         marker.on('popupopen', () => {
             finalNextList.forEach((np, idx) => {
                 const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
@@ -1085,12 +1351,15 @@ function focusOnPadav(padavId) {
     const targetPadav = window.activeYatraPadavs.find(p => String(p.id) === String(padavId));
     const targetMarker = window.padavMarkersMap[padavId];
     if (targetPadav && window.map) {
+        window.focusedOriginPadavId = targetPadav.id;
+        applyMapFilters();
         window.map.flyTo([targetPadav.lat, targetPadav.lng], 13);
-        if (targetMarker) {
-            if (!window.padavLayer.hasLayer(targetMarker)) {
-                targetMarker.addTo(window.padavLayer);
+        const refreshedMarker = window.padavMarkersMap[padavId] || targetMarker;
+        if (refreshedMarker) {
+            if (!window.padavLayer.hasLayer(refreshedMarker)) {
+                refreshedMarker.addTo(window.padavLayer);
             }
-            targetMarker.openPopup();
+            refreshedMarker.openPopup();
         }
     }
 }
