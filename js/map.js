@@ -407,11 +407,79 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
 }
 
 // =========================================================
-// LIVE ROUTE NAVIGATION BAR (HUD) - UPDATES AS YATRI WALKS
+// DRAGGABLE ELEMENT HELPER (FOR FLOATING BOXES / TOOLBARS)
+// =========================================================
+function makeElementMovable(el) {
+    if (!el || el.dataset.movableAttached === '1') return;
+    el.dataset.movableAttached = '1';
+
+    let isDragging = false;
+    let startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+    const onStart = (clientX, clientY, target) => {
+        if (target && (target.tagName === 'BUTTON' || target.tagName === 'INPUT' || target.tagName === 'A' || target.closest('button'))) {
+            return;
+        }
+        const rect = el.getBoundingClientRect();
+        el.style.left = rect.left + 'px';
+        el.style.top = rect.top + 'px';
+        el.style.bottom = 'auto';
+        el.style.right = 'auto';
+        el.style.transform = 'none';
+
+        isDragging = true;
+        startX = clientX;
+        startY = clientY;
+        origLeft = rect.left;
+        origTop = rect.top;
+    };
+
+    const onMove = (clientX, clientY) => {
+        if (!isDragging) return;
+        const maxLeft = Math.max(0, window.innerWidth - el.offsetWidth);
+        const maxTop = Math.max(0, window.innerHeight - el.offsetHeight);
+        const nextLeft = Math.min(Math.max(0, origLeft + (clientX - startX)), maxLeft);
+        const nextTop = Math.min(Math.max(0, origTop + (clientY - startY)), maxTop);
+        el.style.left = nextLeft + 'px';
+        el.style.top = nextTop + 'px';
+    };
+
+    const onEnd = () => {
+        isDragging = false;
+    };
+
+    el.addEventListener('mousedown', (e) => {
+        onStart(e.clientX, e.clientY, e.target);
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+            e.preventDefault();
+            onMove(e.clientX, e.clientY);
+        }
+    });
+    document.addEventListener('mouseup', onEnd);
+
+    el.addEventListener('touchstart', (e) => {
+        if (e.touches && e.touches.length === 1) {
+            onStart(e.touches[0].clientX, e.touches[0].clientY, e.target);
+        }
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+        if (isDragging && e.touches && e.touches.length === 1) {
+            onMove(e.touches[0].clientX, e.touches[0].clientY);
+        }
+    }, { passive: true });
+    document.addEventListener('touchend', onEnd);
+}
+
+// =========================================================
+// LIVE ROUTE NAVIGATION BAR (HUD) - MOVABLE & AUTO-HIDES IN DRAW MODE
 // =========================================================
 function updateLiveNavigationHud(originPadav, targetEntries) {
     let hud = document.getElementById('liveYatraNavHud');
-    if (!originPadav || !Array.isArray(targetEntries) || targetEntries.length === 0) {
+    const isDrawingBusy = !!(window.isManualDrawing || window.isGpsFollowActive);
+
+    if (isDrawingBusy || !originPadav || !Array.isArray(targetEntries) || targetEntries.length === 0) {
         if (hud) hud.style.display = 'none';
         return;
     }
@@ -419,8 +487,9 @@ function updateLiveNavigationHud(originPadav, targetEntries) {
     if (!hud) {
         hud = document.createElement('div');
         hud.id = 'liveYatraNavHud';
-        hud.style.cssText = 'position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:9997; background:rgba(21, 101, 192, 0.96); color:#fff; padding:9px 14px; border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.4); max-width:92%; width:360px; font-family:sans-serif; font-size:12.5px; border:1.5px solid #bbdefb;';
+        hud.style.cssText = 'position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:9997; background:rgba(21, 101, 192, 0.96); color:#fff; padding:9px 14px; border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.4); max-width:92%; width:360px; font-family:sans-serif; font-size:12.5px; border:1.5px solid #bbdefb; cursor:move; touch-action:none;';
         document.body.appendChild(hud);
+        makeElementMovable(hud);
     }
 
     hud.style.display = 'block';
@@ -443,8 +512,9 @@ function updateLiveNavigationHud(originPadav, targetEntries) {
     }).join('');
 
     hud.innerHTML = `
-        <div style="font-size:11px; color:#bbdefb; margin-bottom:3px;">
-            🚩 वर्तमान चरण: <b>${originPadav.name}</b>
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#bbdefb; margin-bottom:3px;">
+            <span>🚩 वर्तमान चरण: <b>${originPadav.name}</b></span>
+            <span style="opacity:0.85; font-size:12px;" title="खींचकर कहीं भी ले जाएं">⠿</span>
         </div>
         ${rowsHtml}
     `;
@@ -758,7 +828,6 @@ function startYatriLiveProgressTracker() {
 
         let statusChanged = false;
 
-        // 1. 500m aage badhne par pichhla padav automatic hide karein
         if (!isUserAdminOrMod()) {
             (window.activeYatraPadavs || []).forEach(p => {
                 if (window.passedPadavIds.has(p.id)) return;
@@ -769,7 +838,6 @@ function startYatriLiveProgressTracker() {
                     const nextArr = synced.list;
 
                     if (Array.isArray(nextArr) && nextArr.length > 0) {
-                        // Agar kisi bhi agale padav ki disha me badh gaye hain to pichhla padav hide karein
                         const movedTowardAnyNext = nextArr.some(np => {
                             const targetObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
                             if (!targetObj) return false;
@@ -785,8 +853,6 @@ function startYatriLiveProgressTracker() {
                             }
                             statusChanged = true;
 
-                            // 2. Branch Pruning: Agar ek se adhik agale padav the aur yatri kisi ek ki taraf
-                            // 450m se zyada badh gaya hai to dusare route/padav ko hide kar dein
                             if (nextArr.length > 1) {
                                 const branchProgress = nextArr.map(np => {
                                     const tObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
@@ -800,7 +866,6 @@ function startYatriLiveProgressTracker() {
                                     branchProgress.sort((a, b) => b.gainedMeters - a.gainedMeters);
                                     const chosen = branchProgress[0];
                                     const runnerUp = branchProgress[1];
-                                    // Jab ek branch par kam se kam 450m aage nikal jayein aur dusare se 350m+ aage hon
                                     if (chosen.gainedMeters > 450 && (chosen.gainedMeters - runnerUp.gainedMeters) > 350) {
                                         for (let k = 1; k < branchProgress.length; k++) {
                                             window.abandonedBranchIds.add(branchProgress[k].id);
@@ -820,7 +885,6 @@ function startYatriLiveProgressTracker() {
         if (statusChanged) {
             applyMapFilters();
         } else {
-            // Chalne par bina click ke live line aur bachi hui duri lagatar update karein
             const subVal = document.getElementById('subRouteFilter')?.value || 'all';
             const catVal = document.getElementById('categoryFilter')?.value || 'all';
             const currentVisible = (window.activeYatraPadavs || []).filter(p =>
@@ -972,13 +1036,11 @@ function resolveSingleActiveOriginPadav(visibleList) {
         if (clicked) return clicked;
     }
 
-    // 1. Agar starting padav abhi tak 500m cross nahi hua hai to wahi origin rahega (A -> B line)
     if (window.selectedStartPadav && !window.passedPadavIds.has(window.selectedStartPadav.id)) {
         const startMatch = visibleList.find(p => String(p.id) === String(window.selectedStartPadav.id));
         if (startMatch) return startMatch;
     }
 
-    // 2. Starting padav cross hone ke baad live GPS ke sabse nazdeeki active padav (B -> C line)
     if (window.yatriLiveCoords && window.yatriLiveCoords.lat && window.yatriLiveCoords.lng) {
         let nearest = null;
         let bestDist = Infinity;
@@ -1024,7 +1086,6 @@ async function drawAutoPadavConnectingLines(visibleList) {
     const shouldQueryLiveOsrm = (now - window.lastLiveNavCalcMs) > 10000;
     if (shouldQueryLiveOsrm) window.lastLiveNavCalcMs = now;
 
-    // Ek se adhik agale padav hain to sabhi branches dikhayein (abandoned branches pehle hi filter ho chuki hain)
     const validTargets = nextPadavsArr
         .map((np, idx) => {
             const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
@@ -1047,7 +1108,6 @@ async function drawAutoPadavConnectingLines(visibleList) {
         const lineColor = branchColors[idx % branchColors.length];
         const hasLiveGps = !!(window.yatriLiveCoords && window.yatriLiveCoords.lat && window.yatriLiveCoords.lng);
 
-        // 1. Live remaining KM calculate karein (Custom Drawn Line -> Live OSRM -> Padav-to-Padav Road KM)
         let liveRemainingKm = null;
         if (hasLiveGps) {
             liveRemainingKm = getRemainingCustomRouteKmFromLiveGps(
@@ -1080,7 +1140,6 @@ async function drawAutoPadavConnectingLines(visibleList) {
             dashArray: '8, 8'
         };
 
-        // 2. Agar live GPS hai to user ki current position se target padav tak real-time dotted road line banayein
         if (hasLiveGps) {
             const liveCacheKey = `live_${targetP.id}`;
             if (window.osrmGeometryCache[liveCacheKey] && !shouldQueryLiveOsrm) {
@@ -1124,7 +1183,6 @@ async function drawAutoPadavConnectingLines(visibleList) {
             } catch (e) {}
         }
 
-        // 3. Fallback: Origin padav se target padav tak OSRM road line (jab tak GPS fix na ho)
         if (!hasCustomLine) {
             const pairCacheKey = `${currentOriginPadav.id}_${targetP.id}_${idx}`;
             if (window.osrmGeometryCache[pairCacheKey]) {
@@ -1385,7 +1443,15 @@ function startManualLineDrawing() {
     window.manualDrawnPoints = [];
     window.manualHistoryStack = [];
 
-    document.getElementById('manualDrawToolbar').style.display = 'block';
+    const hud = document.getElementById('liveYatraNavHud');
+    if (hud) hud.style.display = 'none';
+
+    const toolbar = document.getElementById('manualDrawToolbar');
+    if (toolbar) {
+        toolbar.style.display = 'block';
+        toolbar.style.cursor = 'move';
+        makeElementMovable(toolbar);
+    }
     document.getElementById('manualPointsCount').innerText = '0 points';
     document.getElementById('manualDrawStatus').innerText = 'मैप पर एक बिंदु से दूसरे बिंदु तक क्लिक करके लाइन खींचें।';
 }
@@ -1458,6 +1524,7 @@ function cancelManualLineDrawing() {
     window.manualHistoryStack = [];
     if (window.manualTempLine) window.map.removeLayer(window.manualTempLine);
     document.getElementById('manualDrawToolbar').style.display = 'none';
+    applyMapFilters();
 }
 
 async function saveManualDrawnRoute() {
@@ -1489,7 +1556,6 @@ async function saveManualDrawnRoute() {
     }).bindPopup(`<b>🛣️ ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
 
     cancelManualLineDrawing();
-    applyMapFilters();
     alert("✅ आपका कस्टम मार्ग और उसकी सटीक दूरी सेव हो गई है!");
 }
 
@@ -1509,7 +1575,15 @@ function startGpsFollowRecording() {
     window.lastValidGpsPt = null;
     window.lastValidGpsTime = 0;
 
-    document.getElementById('gpsFollowToolbar').style.display = 'block';
+    const hud = document.getElementById('liveYatraNavHud');
+    if (hud) hud.style.display = 'none';
+
+    const gpsToolbar = document.getElementById('gpsFollowToolbar');
+    if (gpsToolbar) {
+        gpsToolbar.style.display = 'block';
+        gpsToolbar.style.cursor = 'move';
+        makeElementMovable(gpsToolbar);
+    }
     document.getElementById('gpsPointsCount').innerText = '0 points';
     const statusEl = document.getElementById('gpsFollowStatus');
     const pauseBtn = document.getElementById('btnPauseResumeGps');
@@ -1606,6 +1680,7 @@ function cancelGpsFollowRecording() {
     window.gpsRecordedPoints = [];
     if (window.gpsTempLine) window.map.removeLayer(window.gpsTempLine);
     document.getElementById('gpsFollowToolbar').style.display = 'none';
+    applyMapFilters();
 }
 
 async function saveGpsFollowedRoute() {
@@ -1637,6 +1712,5 @@ async function saveGpsFollowedRoute() {
     }).bindPopup(`<b>📡 ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
 
     cancelGpsFollowRecording();
-    applyMapFilters();
     alert("✅ GPS द्वारा रिकॉर्ड किया गया मार्ग और उसकी सटीक दूरी सेव हो गई है!");
 }
