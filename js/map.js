@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - SEPARATE LINE DRAWER, READ MORE, LOCATE ME & LIVE ADMIN TRACKER
+// PARIKRAMAPATH - SEPARATE LINE DRAWER, READ MORE, LOCATE ME & TAT-SYNCED NARMADA PADAVS
 // =========================================================
 
 window.map = null;
@@ -74,7 +74,7 @@ window.setManualStartPadav = function(padavId) {
     window.selectedStartPadav = found;
     saveUserStartPadavLocal(window.activeYatra, found);
     renderIsolatedPadavs(window.activeYatraPadavs);
-    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है। अब आपकी लाइव लोकेशन के अनुसार आगे के पड़ाव दिखते रहेंगे।`);
+    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है। अब आपकी लाइव लोकेशन के अनुसार इसी तट के आगे के पड़ाव दिखते रहेंगे।`);
 };
 
 // ---------------------------------------------------------
@@ -127,6 +127,97 @@ function isStrictSuperOrAdmin() {
     if (!window.currentProfile || !window.currentProfile.role) return false;
     const r = window.currentProfile.role.toLowerCase().trim().replace(/\s+/g, '_');
     return (r === 'super_admin' || r === 'admin');
+}
+
+// =========================================================
+// NARMADA PARIKRAMA TAT (BANK) SYNCHRONIZATION HELPER
+// =========================================================
+function normalizeTatLabel(str) {
+    return (str || '').toString().toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function isSameNarmadaTat(padavA, padavB) {
+    if (!padavA || !padavB) return false;
+    const tatA = normalizeTatLabel(padavA.sub_route);
+    const tatB = normalizeTatLabel(padavB.sub_route);
+    if (!tatA || !tatB) return true; // Agar kisi ek me tat set nahi hai to allow karein
+    return tatA === tatB;
+}
+
+function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
+    let rawNext = p.next_padavs;
+    if (typeof rawNext === 'string') {
+        try { rawNext = JSON.parse(rawNext); } catch (e) { rawNext = []; }
+    }
+    const manualList = Array.isArray(rawNext) ? rawNext : [];
+
+    // 1. Narmada Parikrama me manual list se bhi sirf SAME TAT (sub_route) ke padav filter karein
+    if (isNarmadaParikrama) {
+        const sameTatManual = manualList.filter(np => {
+            const targetObj = (window.activeYatraPadavs || []).find(item => String(item.id) === String(np.id));
+            if (!targetObj) return false;
+            return isSameNarmadaTat(p, targetObj);
+        });
+
+        if (sameTatManual.length > 0) {
+            return { list: sameTatManual, isAuto: false };
+        }
+
+        // 2. Agar manual next_padavs khali hai, to SAME TAT ke agle padav parikrama disha ke hisab se auto-sync karein
+        const tatName = normalizeTatLabel(p.sub_route);
+        const isUttarTat = tatName.includes('उत्तर') || tatName.includes('uttar') || tatName.includes('north');
+        const isDakshinTat = tatName.includes('दक्षिण') || tatName.includes('dakshin') || tatName.includes('south');
+
+        const sameTatCandidates = (window.activeYatraPadavs || [])
+            .filter(other => {
+                if (String(other.id) === String(p.id)) return false;
+                if (window.passedPadavIds.has(other.id)) return false;
+                if (!other.lat || !other.lng) return false;
+                if (!isSameNarmadaTat(p, other)) return false;
+
+                // Clockwise Parikrama Disha:
+                // Dakshin Tat: Amarkantak (East) se Samudra (West) -> lng ghat-te kram me
+                // Uttar Tat: Samudra (West) se Amarkantak (East) -> lng badhte kram me
+                if (isDakshinTat) return other.lng < (p.lng - 0.002);
+                if (isUttarTat) return other.lng > (p.lng + 0.002);
+                return true;
+            })
+            .map(other => {
+                const customKm = getCustomRouteKmBetween(p.lat, p.lng, other.lat, other.lng);
+                const kmVal = (customKm !== null && customKm > 0) ? customKm : quickCalcKm(p.lat, p.lng, other.lat, other.lng);
+                return {
+                    id: other.id,
+                    name: other.name,
+                    path: p.sub_route || ((Array.isArray(other.path_types) && other.path_types[0]) ? other.path_types[0] : 'परिक्रमा मार्ग'),
+                    km: kmVal
+                };
+            })
+            .sort((a, b) => a.km - b.km)
+            .slice(0, 2);
+
+        return { list: sameTatCandidates, isAuto: true };
+    }
+
+    // Anya Yatraon ke liye purana logic
+    if (manualList.length > 0) {
+        return { list: manualList, isAuto: false };
+    }
+
+    if ((window.activeYatraPadavs || []).length > 1) {
+        const autoOther = window.activeYatraPadavs
+            .filter(other => other.id !== p.id && !window.passedPadavIds.has(other.id) && (!p.sub_route || !other.sub_route || other.sub_route === p.sub_route))
+            .map(other => ({
+                id: other.id,
+                name: other.name,
+                path: (Array.isArray(other.path_types) && other.path_types[0]) ? other.path_types[0] : 'मुख्य मार्ग',
+                km: quickCalcKm(p.lat, p.lng, other.lat, other.lng)
+            }))
+            .sort((a, b) => a.km - b.km)
+            .slice(0, 2);
+        return { list: autoOther, isAuto: true };
+    }
+
+    return { list: [], isAuto: false };
 }
 
 // =========================================================
@@ -213,7 +304,6 @@ async function syncYatriLiveLocationToDb(lat, lng, force = false) {
 
     try {
         if (window.currentUser) {
-            // Registered user -> profiles table
             await supabaseClient
                 .from('profiles')
                 .update({
@@ -224,7 +314,6 @@ async function syncYatriLiveLocationToDb(lat, lng, force = false) {
                 })
                 .eq('id', window.currentUser.id);
         } else {
-            // Unregistered (Guest) user -> live_visitors table
             const visitorId = getOrCreateGuestVisitorId();
             await supabaseClient
                 .from('live_visitors')
@@ -246,11 +335,9 @@ function renderSingleAdminLiveYatri(yatri, isGuest = false) {
     const recordId = isGuest ? ('guest_' + yatri.visitor_id) : ('user_' + yatri.id);
     const yatraId = isGuest ? yatri.yatra_id : yatri.active_yatra_id;
 
-    // Apne khud ke marker ko duplicate na dikhayein
     if (!isGuest && window.currentUser && String(yatri.id) === String(window.currentUser.id)) return;
     if (isGuest && String(yatri.visitor_id) === String(getOrCreateGuestVisitorId())) return;
 
-    // Sirf active yatra ke yatris dikhayein
     if (window.activeYatra && yatraId && String(yatraId) !== String(window.activeYatra.id)) {
         return;
     }
@@ -310,7 +397,6 @@ async function loadAllActiveYatrisForAdmin() {
 
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
-    // 1. Registered active yatris fetch karein
     const { data: regUsers } = await supabaseClient
         .from('profiles')
         .select('id, full_name, mobile, role, active_yatra_id, live_lat, live_lng, last_seen_at')
@@ -321,7 +407,6 @@ async function loadAllActiveYatrisForAdmin() {
         regUsers.forEach(u => renderSingleAdminLiveYatri(u, false));
     }
 
-    // 2. Unregistered (Guest) active yatris fetch karein
     const { data: guestUsers } = await supabaseClient
         .from('live_visitors')
         .select('visitor_id, yatra_id, live_lat, live_lng, last_seen_at')
@@ -331,7 +416,6 @@ async function loadAllActiveYatrisForAdmin() {
         guestUsers.forEach(g => renderSingleAdminLiveYatri(g, true));
     }
 
-    // 3. Realtime listeners (Registered + Guest)
     if (!window.adminYatriRealtimeSub) {
         window.adminYatriRealtimeSub = supabaseClient
             .channel('public:profiles_admin_map')
@@ -491,10 +575,14 @@ function openPadavDetailsModal(padavId) {
 }
 
 // =========================================================
-// YATRI LIVE PROGRESS TRACKER (LIVE LOCATION FOCUS + 500M AUTO-HIDE)
+// YATRI LIVE PROGRESS TRACKER (TAT-AWARE 500M AUTO-HIDE)
 // =========================================================
 function startYatriLiveProgressTracker() {
     if (!navigator.geolocation) return;
+
+    const yatraSlug = (window.activeYatra?.slug || '').toLowerCase();
+    const yatraName = (window.activeYatra?.name || '').toLowerCase();
+    const isNarmadaParikrama = yatraSlug.includes('narmada') || yatraName.includes('narmada');
 
     navigator.geolocation.watchPosition(pos => {
         if (pos.coords.accuracy && pos.coords.accuracy > 150) return;
@@ -518,13 +606,11 @@ function startYatriLiveProgressTracker() {
             const distFromPadav = getDistanceInMeters(uLat, uLng, p.lat, p.lng);
 
             if (distFromPadav > 500) {
-                let nextArr = p.next_padavs;
-                if (typeof nextArr === 'string') {
-                    try { nextArr = JSON.parse(nextArr); } catch (e) { nextArr = []; }
-                }
+                const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
+                const nextArr = synced.list;
 
                 if (Array.isArray(nextArr) && nextArr.length > 0) {
-                    const targetObj = window.activeYatraPadavs.find(x => x.id === nextArr[0].id);
+                    const targetObj = window.activeYatraPadavs.find(x => String(x.id) === String(nextArr[0].id));
                     if (targetObj) {
                         const totalSpan = getDistanceInMeters(p.lat, p.lng, targetObj.lat, targetObj.lng);
                         const distToNext = getDistanceInMeters(uLat, uLng, targetObj.lat, targetObj.lng);
@@ -677,19 +763,26 @@ async function drawAutoPadavConnectingLines(visibleList) {
     const primaryColor = window.activeYatra?.theme_color || '#d84315';
     const altRouteColors = ['#1565c0', '#2e7d32', '#6a1b9a'];
 
+    const yatraSlug = (window.activeYatra?.slug || '').toLowerCase();
+    const yatraName = (window.activeYatra?.name || '').toLowerCase();
+    const isNarmadaParikrama = yatraSlug.includes('narmada') || yatraName.includes('narmada');
+
     for (const p of visibleList) {
         if (!p.lat || !p.lng) continue;
 
-        let nextPadavsArr = p.next_padavs;
-        if (typeof nextPadavsArr === 'string') {
-            try { nextPadavsArr = JSON.parse(nextPadavsArr); } catch (e) { nextPadavsArr = []; }
-        }
+        const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
+        const nextPadavsArr = synced.list;
         if (!Array.isArray(nextPadavsArr) || nextPadavsArr.length === 0) continue;
 
         for (let i = 0; i < nextPadavsArr.length; i++) {
             const np = nextPadavsArr[i];
-            const targetP = window.activeYatraPadavs.find(item => item.id === np.id);
+            const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
             if (!targetP || !targetP.lat || !targetP.lng) continue;
+
+            // Narmada Parikrama me alag tat ke beech line kabhi na khinche
+            if (isNarmadaParikrama && !isSameNarmadaTat(p, targetP)) {
+                continue;
+            }
 
             if (hasCustomDrawnRouteBetween(p.lat, p.lng, targetP.lat, targetP.lng)) {
                 continue;
@@ -698,7 +791,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
             const isAlternateRoute = (i > 0);
             const routeColor = isAlternateRoute ? altRouteColors[(i - 1) % altRouteColors.length] : primaryColor;
             const routeBadge = nextPadavsArr.length > 1 ? `<b>[विकल्प मार्ग ${i + 1}]</b> ` : '';
-            const lineTooltip = `${routeBadge}<b>${p.name} ➡️ ${targetP.name}</b><br><small>${np.path || 'परिक्रमा मार्ग'} • <b>${np.km || ''} km</b></small>`;
+            const lineTooltip = `${routeBadge}<b>${p.name} ➡️ ${targetP.name}</b><br><small>${np.path || p.sub_route || 'परिक्रमा मार्ग'} • <b>${np.km || ''} km</b></small>`;
 
             const lineOptions = {
                 color: routeColor,
@@ -831,39 +924,23 @@ function renderIsolatedPadavs(list) {
                 <p style="margin:3px 0; font-size:12px; color:#2e7d32;"><b>सुविधाएं:</b> ${amenities || 'सामान्य'}</p>
             `;
 
-        let nextPadavsArr = p.next_padavs;
-        if (typeof nextPadavsArr === 'string') {
-            try { nextPadavsArr = JSON.parse(nextPadavsArr); } catch(e) { nextPadavsArr = []; }
-        }
-
-        let finalNextList = (Array.isArray(nextPadavsArr) && nextPadavsArr.length > 0) ? nextPadavsArr : [];
-        let isAutoSuggested = false;
-
-        if (!isNarmadaParikrama && finalNextList.length === 0 && window.activeYatraPadavs.length > 1) {
-            isAutoSuggested = true;
-            finalNextList = window.activeYatraPadavs
-                .filter(other => other.id !== p.id && !window.passedPadavIds.has(other.id) && (!p.sub_route || !other.sub_route || other.sub_route === p.sub_route))
-                .map(other => ({
-                    id: other.id,
-                    name: other.name,
-                    path: (Array.isArray(other.path_types) && other.path_types[0]) ? other.path_types[0] : 'मुख्य मार्ग',
-                    km: quickCalcKm(p.lat, p.lng, other.lat, other.lng)
-                }))
-                .sort((a, b) => a.km - b.km)
-                .slice(0, 2);
-        }
+        // TAT-SYNCED NEXT PADAVS (SAME TAT ONLY FOR NARMADA PARIKRAMA)
+        const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
+        const finalNextList = synced.list;
+        const isAutoSuggested = synced.isAuto;
 
         let nextOptionsHtml = '';
         if (finalNextList.length > 0) {
+            const tatLabelText = (isNarmadaParikrama && p.sub_route) ? ` (${p.sub_route})` : '';
             const boxTitle = isAutoSuggested
-                ? '➡️ नज़दीकी अगले पड़ाव (सुझाव):'
-                : (finalNextList.length > 1 ? `➡️ आगे जाने के ${finalNextList.length} रास्ते:` : '➡️ आगे जाने का रास्ता:');
+                ? `➡️ इसी तट${tatLabelText} के अगले पड़ाव:`
+                : (finalNextList.length > 1 ? `➡️ आगे जाने के ${finalNextList.length} रास्ते${tatLabelText}:` : `➡️ आगे जाने का रास्ता${tatLabelText}:`);
 
             nextOptionsHtml = `
                 <div style="background:#f1f8e9; padding:7px; border-radius:6px; margin:7px 0; border-left:3px solid #2e7d32;">
                     <b style="font-size:11px; color:#2e7d32;">${boxTitle}</b>` +
                     finalNextList.map((np, idx) => {
-                        const targetP = window.activeYatraPadavs.find(item => item.id === np.id);
+                        const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
                         let targetFacilities = '';
                         if (targetP) {
                             if (targetP.category === 'Point') {
@@ -947,7 +1024,7 @@ function renderIsolatedPadavs(list) {
 }
 
 function focusOnPadav(padavId) {
-    const targetPadav = window.activeYatraPadavs.find(p => p.id === padavId);
+    const targetPadav = window.activeYatraPadavs.find(p => String(p.id) === String(padavId));
     const targetMarker = window.padavMarkersMap[padavId];
     if (targetPadav && window.map) {
         window.map.flyTo([targetPadav.lat, targetPadav.lng], 13);
