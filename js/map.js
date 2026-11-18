@@ -314,9 +314,30 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
 
 // =========================================================
 // NARMADA PARIKRAMA TAT (BANK) SYNCHRONIZATION HELPER
+// Uttar Tat: Revasagar (West) -> Amarkantak (East) [lng badhte kram me]
+// Dakshin Tat: Amarkantak (East) -> Revasagar/Sangam (West) [lng ghat-te kram me]
 // =========================================================
 function normalizeTatLabel(str) {
     return (str || '').toString().toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function getNarmadaTatDirection(subRouteStr) {
+    const tatName = normalizeTatLabel(subRouteStr);
+    if (!tatName) return 'unknown';
+
+    const isDakshin = tatName.includes('दक्षिण') ||
+                      tatName.includes('dakshin') ||
+                      tatName.includes('dakshina') ||
+                      tatName.includes('south');
+
+    const isUttar = tatName.includes('उत्तर') ||
+                    tatName.includes('uttar') ||
+                    tatName.includes('uttara') ||
+                    tatName.includes('north');
+
+    if (isDakshin && !isUttar) return 'dakshin';
+    if (isUttar && !isDakshin) return 'uttar';
+    return 'unknown';
 }
 
 function isSameNarmadaTat(padavA, padavB) {
@@ -324,7 +345,30 @@ function isSameNarmadaTat(padavA, padavB) {
     const tatA = normalizeTatLabel(padavA.sub_route);
     const tatB = normalizeTatLabel(padavB.sub_route);
     if (!tatA || !tatB) return true;
+
+    const dirA = getNarmadaTatDirection(tatA);
+    const dirB = getNarmadaTatDirection(tatB);
+    if (dirA !== 'unknown' && dirB !== 'unknown') {
+        return dirA === dirB;
+    }
     return tatA === tatB;
+}
+
+function isCorrectNarmadaDirection(fromPadav, toPadav) {
+    const dir = getNarmadaTatDirection(fromPadav.sub_route);
+    const fromLng = parseFloat(fromPadav.lng);
+    const toLng = parseFloat(toPadav.lng);
+    if (isNaN(fromLng) || isNaN(toLng)) return true;
+
+    // Dakshin Tat: Amarkantak (East ~81.75) se Revasagar/Sangam (West ~72.6) ki taraf -> toLng < fromLng (Pashchim)
+    if (dir === 'dakshin') {
+        return toLng < (fromLng - 0.001);
+    }
+    // Uttar Tat: Revasagar (West ~72.6) se Amarkantak (East ~81.75) ki taraf -> toLng > fromLng (Purv)
+    if (dir === 'uttar') {
+        return toLng > (fromLng + 0.001);
+    }
+    return true;
 }
 
 function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
@@ -339,16 +383,13 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
             if (window.abandonedBranchIds.has(np.id)) return false;
             const targetObj = (window.activeYatraPadavs || []).find(item => String(item.id) === String(np.id));
             if (!targetObj) return false;
-            return isSameNarmadaTat(p, targetObj);
+            if (!isSameNarmadaTat(p, targetObj)) return false;
+            return isCorrectNarmadaDirection(p, targetObj);
         });
 
         if (sameTatManual.length > 0) {
             return { list: sameTatManual, isAuto: false };
         }
-
-        const tatName = normalizeTatLabel(p.sub_route);
-        const isUttarTat = tatName.includes('उत्तर') || tatName.includes('uttar') || tatName.includes('north');
-        const isDakshinTat = tatName.includes('दक्षिण') || tatName.includes('dakshin') || tatName.includes('south');
 
         const sameTatCandidates = (window.activeYatraPadavs || [])
             .filter(other => {
@@ -357,10 +398,7 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
                 if (window.abandonedBranchIds.has(other.id)) return false;
                 if (!other.lat || !other.lng) return false;
                 if (!isSameNarmadaTat(p, other)) return false;
-
-                if (isDakshinTat) return other.lng < (p.lng - 0.002);
-                if (isUttarTat) return other.lng > (p.lng + 0.002);
-                return true;
+                return isCorrectNarmadaDirection(p, other);
             })
             .map(other => {
                 const knownKm = getResolvedPathKmSync(p, other, null, 0);
@@ -1091,6 +1129,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
             const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
             if (!targetP || !targetP.lat || !targetP.lng) return null;
             if (isNarmadaParikrama && !isSameNarmadaTat(currentOriginPadav, targetP)) return null;
+            if (isNarmadaParikrama && !isCorrectNarmadaDirection(currentOriginPadav, targetP)) return null;
             return { np, targetP, idx };
         })
         .filter(Boolean);
