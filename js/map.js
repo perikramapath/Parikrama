@@ -134,6 +134,105 @@ function isStrictSuperOrAdmin() {
 }
 
 // =========================================================
+// SEARCH LOCATION FOR QUICK ADD PADAV ON MAP
+// =========================================================
+function buildQuickAddPadavPopupHtml(latStr, lngStr, placeLabel = '') {
+    const adminLabel = isUserAdminOrMod()
+        ? '➕ यहाँ नया पड़ाव जोड़ें (सीधे लाइव)'
+        : '➕ नया पड़ाव सुझाएं (Admin अप्रूवल के बाद दिखेगा)';
+    const titleText = placeLabel ? `📍 ${placeLabel}` : '📍 चयनित स्थान';
+
+    return `
+        <div style="text-align:center; font-family:sans-serif; min-width:205px;">
+            <div style="display:flex; gap:4px; margin-bottom:7px;">
+                <input type="text" id="quickPadavLocationSearchInput" placeholder="स्थान खोजें (गाँव/मंदिर)..."
+                    onkeydown="if(event.key==='Enter'){ event.preventDefault(); searchQuickAddPadavLocation(); }"
+                    style="flex:1; padding:5px 7px; border:1px solid #ccc; border-radius:4px; font-size:12px; outline:none;" />
+                <button type="button" onclick="searchQuickAddPadavLocation()"
+                    style="background:#1565c0; color:#fff; border:none; padding:5px 9px; border-radius:4px; font-size:12px; cursor:pointer; font-weight:bold;">
+                    🔍
+                </button>
+            </div>
+            <div id="quickPadavSearchStatus" style="font-size:11px; color:#d84315; margin-bottom:4px; display:none;"></div>
+            <b style="font-size:12px; color:#333;">${titleText}</b><br>
+            <small style="color:#666;">${latStr}, ${lngStr}</small><br>
+            <button onclick="openAddPadavAtCoords('${latStr}', '${lngStr}')" 
+                style="margin-top:8px; width:100%; background:#2e7d32; color:white; border:none; padding:7px 10px; border-radius:5px; font-size:12px; font-weight:bold; cursor:pointer;">
+                ${adminLabel}
+            </button>
+        </div>
+    `;
+}
+
+window.searchQuickAddPadavLocation = async function() {
+    const inputEl = document.getElementById('quickPadavLocationSearchInput');
+    const statusEl = document.getElementById('quickPadavSearchStatus');
+    if (!inputEl || !window.map) return;
+
+    const query = inputEl.value.trim();
+    if (!query) return;
+
+    if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.style.color = '#0288d1';
+        statusEl.innerText = '⏳ स्थान खोजा जा रहा है...';
+    }
+
+    // 1. Pehle active yatra ke existing padavs me check karein
+    const localMatch = (window.activeYatraPadavs || []).find(p =>
+        p.name && p.name.toLowerCase().includes(query.toLowerCase()) && p.lat && p.lng
+    );
+
+    if (localMatch) {
+        const lat = parseFloat(localMatch.lat);
+        const lng = parseFloat(localMatch.lng);
+        const latStr = lat.toFixed(6);
+        const lngStr = lng.toFixed(6);
+        window.map.flyTo([lat, lng], 14);
+        L.popup()
+            .setLatLng([lat, lng])
+            .setContent(buildQuickAddPadavPopupHtml(latStr, lngStr, localMatch.name))
+            .openOn(window.map);
+        return;
+    }
+
+    // 2. OpenStreetMap Nominatim se global/India location search karein
+    try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=${encodeURIComponent(query)}`;
+        const res = await fetch(url, { headers: { 'Accept-Language': 'hi,en' } });
+        const results = await res.json();
+
+        if (Array.isArray(results) && results.length > 0) {
+            const hit = results[0];
+            const lat = parseFloat(hit.lat);
+            const lng = parseFloat(hit.lon);
+            const latStr = lat.toFixed(6);
+            const lngStr = lng.toFixed(6);
+            const shortName = (hit.display_name || query).split(',')[0];
+
+            window.map.flyTo([lat, lng], 14);
+            L.popup()
+                .setLatLng([lat, lng])
+                .setContent(buildQuickAddPadavPopupHtml(latStr, lngStr, shortName))
+                .openOn(window.map);
+            return;
+        }
+
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.style.color = '#dc3545';
+            statusEl.innerText = '❌ स्थान नहीं मिला, दूसरा नाम लिखें।';
+        }
+    } catch (e) {
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.style.color = '#dc3545';
+            statusEl.innerText = '❌ सर्च में त्रुटि हुई।';
+        }
+    }
+};
+
+// =========================================================
 // CUSTOM ROUTE & REAL ROAD KM CALCULATOR (ZERO AIR DISTANCE)
 // =========================================================
 function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
@@ -208,7 +307,6 @@ function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
     return null;
 }
 
-// Live GPS se kisi target padav tak ki remaining road distance (custom route par ya OSRM par)
 function getRemainingCustomRouteKmFromLiveGps(uLat, uLng, targetPadav) {
     const routes = window.activeCustomRoutes || [];
     const snapToleranceMeters = 550;
@@ -314,8 +412,6 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
 
 // =========================================================
 // NARMADA PARIKRAMA TAT (BANK) SYNCHRONIZATION HELPER
-// Uttar Tat: Revasagar (West) -> Amarkantak (East) [lng badhte kram me]
-// Dakshin Tat: Amarkantak (East) -> Revasagar/Sangam (West) [lng ghat-te kram me]
 // =========================================================
 function normalizeTatLabel(str) {
     return (str || '').toString().toLowerCase().trim().replace(/\s+/g, ' ');
@@ -360,11 +456,9 @@ function isCorrectNarmadaDirection(fromPadav, toPadav) {
     const toLng = parseFloat(toPadav.lng);
     if (isNaN(fromLng) || isNaN(toLng)) return true;
 
-    // Dakshin Tat: Amarkantak (East ~81.75) se Revasagar/Sangam (West ~72.6) ki taraf -> toLng < fromLng (Pashchim)
     if (dir === 'dakshin') {
         return toLng < (fromLng - 0.001);
     }
-    // Uttar Tat: Revasagar (West ~72.6) se Amarkantak (East ~81.75) ki taraf -> toLng > fromLng (Purv)
     if (dir === 'uttar') {
         return toLng > (fromLng + 0.001);
     }
@@ -1001,20 +1095,9 @@ async function initAndLoadIsolatedMap() {
             if (window.currentUser) {
                 const latStr = clickLat.toFixed(6);
                 const lngStr = clickLng.toFixed(6);
-                const adminLabel = isUserAdminOrMod() ? '➕ यहाँ नया पड़ाव जोड़ें (सीधे लाइव)' : '➕ नया पड़ाव सुझाएं (Admin अप्रूवल के बाद दिखेगा)';
-                const quickAddHtml = `
-                    <div style="text-align:center; font-family:sans-serif; min-width:185px;">
-                        <b style="font-size:12px; color:#333;">📍 चयनित स्थान</b><br>
-                        <small style="color:#666;">${latStr}, ${lngStr}</small><br>
-                        <button onclick="openAddPadavAtCoords('${latStr}', '${lngStr}')" 
-                            style="margin-top:8px; width:100%; background:#2e7d32; color:white; border:none; padding:7px 10px; border-radius:5px; font-size:12px; font-weight:bold; cursor:pointer;">
-                            ${adminLabel}
-                        </button>
-                    </div>
-                `;
                 L.popup()
                     .setLatLng(e.latlng)
-                    .setContent(quickAddHtml)
+                    .setContent(buildQuickAddPadavPopupHtml(latStr, lngStr))
                     .openOn(window.map);
             }
         });
