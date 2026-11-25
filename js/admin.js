@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - ADMIN, YATRA CRUD, FORMATTER, AARTI, PADAV & DONATION
+// PARIKRAMAPATH - ADMIN, YATRA CRUD, FORMATTER, AARTI, PADAV, DONATION & DIARY APPROVAL
 // =========================================================
 
 window.tempNextPadavs = [];
@@ -11,6 +11,7 @@ window.donationSettingsCache = {
     account_number: '',
     ifsc_code: ''
 };
+window.appImgbbApiKeyCache = localStorage.getItem('pp_imgbb_api_key') || '';
 let donorPhotoBase64 = null;
 
 function getCleanUserRole() {
@@ -389,7 +390,7 @@ async function submitNewPadav() {
 }
 
 // =========================================================
-// 2. ADMIN MODAL: PENDING PADAVS + YATRA CRUD + AARTI + DONATION
+// 2. ADMIN MODAL: PENDING PADAVS + YATRA CRUD + AARTI + DONATION + DIARIES
 // =========================================================
 async function openAdminModal() {
     showModal('adminModal');
@@ -412,6 +413,10 @@ async function openAdminModal() {
 
     if (isAdminUser() && window.activeYatra && typeof loadAdminAartis === 'function') {
         await loadAdminAartis();
+    }
+
+    if (isAdminUser()) {
+        await renderAdminDiaryApprovalSection();
     }
 
     const box = document.getElementById('pendingPadavsList');
@@ -1015,13 +1020,275 @@ async function deleteDonorEntry(donorId) {
     await loadPublicDonorWall();
 }
 
+// =========================================================
+// 6. IMGBB API KEY & PUBLIC YATRA DIARY APPROVAL SYSTEM
+// =========================================================
+async function loadAppImgbbSettings() {
+    try {
+        const { data } = await supabaseClient
+            .from('app_settings')
+            .select('imgbb_api_key')
+            .eq('id', 1)
+            .single();
+        if (data && data.imgbb_api_key) {
+            window.appImgbbApiKeyCache = data.imgbb_api_key;
+            localStorage.setItem('pp_imgbb_api_key', data.imgbb_api_key);
+        }
+    } catch (e) {}
+}
+
+window.saveAdminImgbbApiKey = async function() {
+    if (!isSuperAdminUser()) return;
+    const input = document.getElementById('adminImgbbKeyInput');
+    if (!input) return;
+
+    const apiKey = input.value.trim();
+    if (!apiKey) return alert("⚠️ कृपया ImgBB API Key डालें।");
+
+    const { error } = await supabaseClient.from('app_settings').upsert({
+        id: 1,
+        imgbb_api_key: apiKey,
+        updated_at: new Date().toISOString()
+    });
+
+    if (error) return alert("Save Error: " + error.message);
+
+    window.appImgbbApiKeyCache = apiKey;
+    localStorage.setItem('pp_imgbb_api_key', apiKey);
+    alert("✅ ImgBB API Key सुरक्षित हो गई है! अब यात्री डायरी में 1-2 फोटो अपलोड कर सकेंगे।");
+};
+
+// Browser-side image compression + ImgBB upload helper
+window.uploadImageToImgBB = async function(file) {
+    if (!file) return null;
+    if (!window.appImgbbApiKeyCache) {
+        await loadAppImgbbSettings();
+    }
+    const apiKey = window.appImgbbApiKeyCache;
+    if (!apiKey) {
+        throw new Error("ImgBB API Key सेट नहीं है। कृपया Admin Panel में ImgBB API Key जोड़ें।");
+    }
+
+    const compressedBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const img = new Image();
+            img.onload = () => {
+                const maxDim = 1024;
+                let w = img.width;
+                let h = img.height;
+                if (w > maxDim || h > maxDim) {
+                    if (w > h) {
+                        h = Math.round((h * maxDim) / w);
+                        w = maxDim;
+                    } else {
+                        w = Math.round((w * maxDim) / h);
+                        h = maxDim;
+                    }
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, w, h);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.78);
+                resolve(dataUrl.split(',')[1]);
+            };
+            img.onerror = () => reject(new Error("Invalid image file"));
+            img.src = ev.target.result;
+        };
+        reader.onerror = () => reject(new Error("File read failed"));
+        reader.readAsDataURL(file);
+    });
+
+    const formData = new FormData();
+    formData.append('key', apiKey);
+    formData.append('image', compressedBase64);
+
+    const resp = await fetch('https://api.imgbb.com/1/upload', {
+        method: 'POST',
+        body: formData
+    });
+    const json = await resp.json();
+    if (json && json.success && json.data && json.data.url) {
+        return json.data.url;
+    }
+    throw new Error(json?.error?.message || "ImgBB upload failed");
+};
+
+async function renderAdminDiaryApprovalSection() {
+    const adminModal = document.getElementById('adminModal');
+    if (!adminModal) return;
+
+    await loadAppImgbbSettings();
+
+    let diaryManagerBox = document.getElementById('adminYatraDiariesManager');
+    if (!diaryManagerBox) {
+        diaryManagerBox = document.createElement('div');
+        diaryManagerBox.id = 'adminYatraDiariesManager';
+        diaryManagerBox.style.cssText = 'background:#e8f5e9; padding:12px; border-radius:8px; border:1px solid #81c784; margin-top:15px;';
+        adminModal.appendChild(diaryManagerBox);
+    }
+
+    const isSuper = isSuperAdminUser();
+    const imgbbKeyHtml = isSuper ? `
+        <div style="background:#ffffff; padding:8px; border-radius:6px; border:1px solid #c8e6c9; margin-bottom:10px;">
+            <label style="font-size:11.5px; font-weight:bold; color:#1b5e20; display:block; margin-bottom:4px;">
+                🖼️ ImgBB API Key (यात्री डायरी फोटो अपलोड हेतु):
+            </label>
+            <div style="display:flex; gap:5px;">
+                <input type="text" id="adminImgbbKeyInput" value="${window.appImgbbApiKeyCache || ''}" placeholder="ImgBB API Key यहाँ पेस्ट करें..." class="form-input" style="margin:0; flex:1; font-size:12px;">
+                <button type="button" onclick="saveAdminImgbbApiKey()" style="background:#2e7d32; color:#fff; border:none; padding:0 12px; border-radius:5px; font-weight:bold; font-size:12px; cursor:pointer;">Save</button>
+            </div>
+        </div>
+    ` : '';
+
+    diaryManagerBox.innerHTML = `
+        <h4 style="margin:0 0 8px 0; color:#1b5e20;">📖 Pending Yatra Diaries (यात्री अनुभव अप्रूवल)</h4>
+        ${imgbbKeyHtml}
+        <div id="pendingYatraDiariesList" style="max-height:240px; overflow-y:auto;">
+            <small style="color:#555;">यात्रा डायरियाँ लोड हो रही हैं...</small>
+        </div>
+    `;
+
+    const listEl = document.getElementById('pendingYatraDiariesList');
+    const { data: diaries, error } = await supabaseClient
+        .from('yatra_diaries')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(30);
+
+    if (error || !diaries || diaries.length === 0) {
+        listEl.innerHTML = '<small style="color:#666;">अभी कोई यात्रा डायरी सबमिट नहीं हुई है।</small>';
+        return;
+    }
+
+    listEl.innerHTML = diaries.map(d => {
+        let photos = d.photo_urls;
+        if (typeof photos === 'string') {
+            try { photos = JSON.parse(photos); } catch (e) { photos = []; }
+        }
+        photos = Array.isArray(photos) ? photos : [];
+        const imgsHtml = photos.length > 0
+            ? `<div style="display:flex; gap:6px; margin:6px 0;">${photos.map(u => `<a href="${u}" target="_blank"><img src="${u}" style="width:62px; height:62px; object-fit:cover; border-radius:6px; border:1px solid #ccc;"></a>`).join('')}</div>`
+            : '';
+
+        const isApproved = (d.status === 'approved');
+        return `
+            <div style="background:#ffffff; padding:8px; border-radius:6px; margin-bottom:7px; border:1px solid ${isApproved ? '#a5d6a7' : '#ffcc80'}; font-size:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <b style="color:#d84315;">${d.yatri_name} — ${d.yatra_name} (Day ${d.day_number})</b>
+                    <span style="font-size:10.5px; background:${isApproved ? '#e8f5e9' : '#fff3e0'}; color:${isApproved ? '#2e7d32' : '#e65100'}; padding:2px 6px; border-radius:4px; font-weight:bold;">
+                        ${isApproved ? 'LIVE' : 'PENDING'}
+                    </span>
+                </div>
+                <div style="color:#555; margin-top:2px;">
+                    📅 ${d.diary_date || ''} ${d.diary_time || ''} • 🚩 ${d.start_place || '-'} ➔ 🛌 ${d.night_halt || '-'} (${d.distance_km || 0} km)
+                </div>
+                ${d.experience_text ? `<p style="margin:5px 0; color:#222; background:#f9fbe7; padding:5px; border-radius:4px;">"${d.experience_text}"</p>` : ''}
+                ${imgsHtml}
+                <div style="display:flex; gap:6px; margin-top:6px;">
+                    ${!isApproved ? `<button type="button" onclick="approveYatraDiary('${d.id}')" style="background:#2e7d32; color:#fff; border:none; padding:4px 9px; border-radius:4px; font-weight:bold; cursor:pointer;">✔ Approve & Publish</button>` : ''}
+                    <button type="button" onclick="deleteYatraDiary('${d.id}')" style="background:#dc3545; color:#fff; border:none; padding:4px 9px; border-radius:4px; font-weight:bold; cursor:pointer;">🗑️ Delete</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+window.approveYatraDiary = async function(diaryId) {
+    const { error } = await supabaseClient
+        .from('yatra_diaries')
+        .update({ status: 'approved' })
+        .eq('id', diaryId);
+    if (error) return alert("Error: " + error.message);
+    await renderAdminDiaryApprovalSection();
+    await loadPublicYatraDiariesWall();
+};
+
+window.deleteYatraDiary = async function(diaryId) {
+    if (!confirm("क्या आप इस यात्रा डायरी को हमेशा के लिए हटाना चाहते हैं?")) return;
+    const { error } = await supabaseClient
+        .from('yatra_diaries')
+        .delete()
+        .eq('id', diaryId);
+    if (error) return alert("Error: " + error.message);
+    await renderAdminDiaryApprovalSection();
+    await loadPublicYatraDiariesWall();
+};
+
+// Public Approved Yatra Diaries Wall on Home Page
+async function loadPublicYatraDiariesWall() {
+    const donorWall = document.getElementById('publicDonorWallGrid');
+    if (!donorWall) return;
+
+    let diarySection = document.getElementById('publicYatraDiariesSection');
+    if (!diarySection) {
+        diarySection = document.createElement('section');
+        diarySection.id = 'publicYatraDiariesSection';
+        diarySection.setAttribute('aria-label', 'यात्रियों की परिक्रमा डायरी');
+        diarySection.style.cssText = 'margin-top:22px; padding:14px; background:#f9fbe7; border:1.5px solid #c5e1a5; border-radius:14px; text-align:left;';
+        const parentSec = donorWall.closest('section');
+        if (parentSec && parentSec.parentNode) {
+            parentSec.parentNode.insertBefore(diarySection, parentSec);
+        }
+    }
+
+    const { data: approvedDiaries } = await supabaseClient
+        .from('yatra_diaries')
+        .select('*')
+        .eq('status', 'approved')
+        .order('created_at', { ascending: false })
+        .limit(12);
+
+    if (!approvedDiaries || approvedDiaries.length === 0) {
+        diarySection.style.display = 'none';
+        return;
+    }
+
+    diarySection.style.display = 'block';
+    diarySection.innerHTML = `
+        <h2 style="font-size:17px; color:#2e7d32; margin:0 0 10px 0;">📖 यात्रियों के लाइव अनुभव (Yatra Diaries)</h2>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:10px;">
+            ${approvedDiaries.map(d => {
+                let photos = d.photo_urls;
+                if (typeof photos === 'string') {
+                    try { photos = JSON.parse(photos); } catch (e) { photos = []; }
+                }
+                photos = Array.isArray(photos) ? photos : [];
+                const photoGrid = photos.length > 0
+                    ? `<div style="display:flex; gap:6px; margin-top:7px;">${photos.map(u => `<a href="${u}" target="_blank" style="flex:1;"><img src="${u}" alt="${d.yatri_name}" style="width:100%; height:95px; object-fit:cover; border-radius:7px; border:1px solid #ddd;"></a>`).join('')}</div>`
+                    : '';
+
+                return `
+                    <article style="background:#ffffff; border:1px solid #dcedc8; border-radius:10px; padding:10px; box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+                        <div style="font-weight:bold; font-size:13.5px; color:#d84315;">
+                            🚩 ${d.yatri_name} — ${d.yatra_name} | Day ${d.day_number}
+                        </div>
+                        <div style="font-size:11px; color:#666; margin:3px 0 6px 0;">
+                            📅 ${d.diary_date || ''} ${d.diary_time ? '• 🕒 ' + d.diary_time : ''}
+                        </div>
+                        <div style="font-size:12px; color:#1b5e20; background:#f1f8e9; padding:5px 7px; border-radius:6px; margin-bottom:6px;">
+                            🚶 ${d.start_place || 'आरंभ'} ➔ 🛌 <b>${d.night_halt || 'विश्राम'}</b> (${d.distance_km || 0} km)
+                        </div>
+                        ${d.experience_text ? `<p style="margin:0; font-size:12.5px; color:#333; line-height:1.55;">${d.experience_text}</p>` : ''}
+                        ${photoGrid}
+                    </article>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     setTimeout(syncOfflineAartis, 2500);
     setTimeout(initDonationAndDonorWall, 600);
+    setTimeout(loadAppImgbbSettings, 800);
+    setTimeout(loadPublicYatraDiariesWall, 1000);
 });
 
 // =========================================================
-// 6. MODAL & MENU HELPERS
+// 7. MODAL & MENU HELPERS
 // =========================================================
 function showModal(id) {
     closeAllModals();
