@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - LIVE ACTIVE YATRI TRACKER (ONLY SUPER_ADMIN & ADMIN)
+// PARIKRAMAPATH - LIVE ACTIVE YATRI TRACKER (ALL YATRAS FOR SUPER_ADMIN & ADMIN)
 // =========================================================
 
 let yatriPingInterval = null;
@@ -7,11 +7,38 @@ let adminLiveLayer = null;
 let adminLiveRealtime = null;
 let liveYatriMarkers = {};
 let isAdminLiveVisible = true;
+let cachedYatrasNameMap = {};
 
 function isStrictAdmin() {
     if (!window.currentProfile) return false;
     const cleanRole = (window.currentProfile.role || '').toLowerCase().trim().replace(/\s+/g, '_');
     return (cleanRole === 'super_admin' || cleanRole === 'admin');
+}
+
+async function ensureYatrasNameMap() {
+    if (Object.keys(cachedYatrasNameMap).length > 0) return cachedYatrasNameMap;
+
+    if (Array.isArray(window.allYatrasList)) {
+        window.allYatrasList.forEach(y => {
+            cachedYatrasNameMap[String(y.id)] = y.name_hi || y.name;
+        });
+    }
+    if (window.activeYatra && window.activeYatra.id) {
+        cachedYatrasNameMap[String(window.activeYatra.id)] = window.activeYatra.name_hi || window.activeYatra.name;
+    }
+
+    if (Object.keys(cachedYatrasNameMap).length === 0 && typeof supabaseClient !== 'undefined') {
+        try {
+            const { data } = await supabaseClient.from('yatras').select('id, name, name_hi');
+            if (Array.isArray(data)) {
+                data.forEach(y => {
+                    cachedYatrasNameMap[String(y.id)] = y.name_hi || y.name;
+                });
+            }
+        } catch (e) {}
+    }
+
+    return cachedYatrasNameMap;
 }
 
 // 1. Active Yatri ki GPS location har 30 second me update karein
@@ -43,7 +70,7 @@ function startYatriLocationBroadcast() {
     yatriPingInterval = setInterval(sendPing, 30000);
 }
 
-// 2. Sirf super_admin aur admin ke liye Floating Toggle Button aur Live Map Layer
+// 2. Sirf super_admin aur admin ke liye Floating Toggle Button aur Live Map Layer (Sabhi Yatras ke liye)
 function initAdminLiveYatriTracker() {
     if (!isStrictAdmin()) return;
 
@@ -87,10 +114,6 @@ function plotSingleYatriMarker(yatri) {
     const mapObj = getMapInstance();
     if (!mapObj || !yatri.live_lat || !yatri.live_lng) return;
 
-    if (window.activeYatra && yatri.active_yatra_id && String(yatri.active_yatra_id) !== String(window.activeYatra.id)) {
-        return;
-    }
-
     if (!adminLiveLayer) {
         adminLiveLayer = L.layerGroup().addTo(mapObj);
     } else if (!mapObj.hasLayer(adminLiveLayer) && isAdminLiveVisible) {
@@ -101,6 +124,10 @@ function plotSingleYatriMarker(yatri) {
         ? new Date(yatri.last_seen_at).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' })
         : 'अभी';
 
+    const yatraLabel = yatri.active_yatra_id
+        ? (cachedYatrasNameMap[String(yatri.active_yatra_id)] || 'सक्रिय परिक्रमा')
+        : 'परिक्रमा';
+
     const icon = L.divIcon({
         className: 'admin-live-yatri-pin',
         html: `<div style="background:#1565c0; color:#fff; border:2px solid #fff; border-radius:50%; width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:15px; box-shadow:0 2px 8px rgba(0,0,0,0.45);">🚶</div>`,
@@ -109,8 +136,9 @@ function plotSingleYatriMarker(yatri) {
     });
 
     const popupHtml = `
-        <div style="font-family:sans-serif; min-width:185px; font-size:13px; line-height:1.5;">
+        <div style="font-family:sans-serif; min-width:195px; font-size:13px; line-height:1.5;">
             <b style="color:#1565c0; font-size:14px;">🚶 ${yatri.full_name || 'यात्री'}</b><br>
+            <span style="display:inline-block; background:#fff3e0; color:#d84315; padding:1px 6px; border-radius:4px; font-size:11.5px; font-weight:bold; margin:2px 0;">🚩 ${yatraLabel}</span><br>
             <span><b>📞 मोबाइल:</b> <a href="tel:${yatri.mobile}">${yatri.mobile || 'N/A'}</a></span><br>
             <span><b>🕒 अंतिम लोकेशन:</b> ${seenTime}</span><br>
             <div style="margin-top:6px; display:flex; gap:6px;">
@@ -128,12 +156,19 @@ function plotSingleYatriMarker(yatri) {
         marker.addTo(adminLiveLayer);
         liveYatriMarkers[yatri.id] = marker;
     }
+
+    const btn = document.getElementById('adminLiveYatriBtn');
+    if (btn && isAdminLiveVisible) {
+        btn.innerText = `👥 लाइव यात्री (${Object.keys(liveYatriMarkers).length})`;
+    }
 }
 
 async function loadAndRenderActiveYatris() {
     if (!isStrictAdmin() || !isAdminLiveVisible) return;
     const mapObj = getMapInstance();
     if (!mapObj) return;
+
+    await ensureYatrasNameMap();
 
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabaseClient
@@ -145,15 +180,11 @@ async function loadAndRenderActiveYatris() {
     if (error || !Array.isArray(data)) return;
 
     const btn = document.getElementById('adminLiveYatriBtn');
-    const filtered = window.activeYatra
-        ? data.filter(u => String(u.active_yatra_id) === String(window.activeYatra.id))
-        : data;
-
     if (btn) {
-        btn.innerText = `👥 लाइव यात्री (${filtered.length})`;
+        btn.innerText = `👥 लाइव यात्री (${data.length})`;
     }
 
-    filtered.forEach(plotSingleYatriMarker);
+    data.forEach(plotSingleYatriMarker);
 }
 
 function subscribeAdminLiveYatris() {
@@ -161,8 +192,9 @@ function subscribeAdminLiveYatris() {
 
     adminLiveRealtime = supabaseClient
         .channel('public:profiles_live_yatris')
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, (payload) => {
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, async (payload) => {
             if (isStrictAdmin() && isAdminLiveVisible && payload && payload.new && payload.new.live_lat) {
+                await ensureYatrasNameMap();
                 plotSingleYatriMarker(payload.new);
             }
         })
