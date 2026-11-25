@@ -2,7 +2,7 @@
 
 const SUPABASE_URL = "https://ohazukqrnmiycvkldeeq.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9oYXp1a3Fybm1peWN2a2xkZWVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NzM5NTcsImV4cCI6MjExMDI0OTk1N30.6Hq116jqCeESuM9cWmmJljdAj6Mawjfnf_TCCFXDB-o";
-const DEFAULT_OG_IMAGE = "https://cdn-icons-png.flaticon.com/512/3658/3658756.png";
+const ALWAYS_OG_IMAGE = "https://parikramapath.in/icon-512.png";
 
 function escapeHtmlAttr(str) {
   return (str || "")
@@ -41,18 +41,6 @@ function slugifyDiaryPart(val) {
   return cleaned || "yatra";
 }
 
-function extractFirstPhoto(photoUrls) {
-  let arr = photoUrls;
-  if (typeof arr === "string") {
-    try { arr = JSON.parse(arr); } catch (e) { arr = []; }
-  }
-  if (Array.isArray(arr)) {
-    const valid = arr.find(u => typeof u === "string" && /^https?:\/\//i.test(u.trim()));
-    if (valid) return valid.trim();
-  }
-  return DEFAULT_OG_IMAGE;
-}
-
 async function fetchDiaryMetaForPath(pathname) {
   const parts = pathname.replace(/\/+$/, "").split("/").filter(Boolean);
   if (parts.length < 4 || parts[0].toLowerCase() !== "diary") return null;
@@ -64,7 +52,7 @@ async function fetchDiaryMetaForPath(pathname) {
 
   try {
     const resp = await fetch(
-      `${SUPABASE_URL}/rest/v1/yatra_diaries?select=yatri_name,yatra_name,day_number,diary_date,start_place,night_halt,distance_km,experience_text,photo_urls&status=eq.approved&order=created_at.desc&limit=50`,
+      `${SUPABASE_URL}/rest/v1/yatra_diaries?select=yatri_name,yatra_name,day_number,diary_date,start_place,night_halt,distance_km,experience_text&status=eq.approved&order=created_at.desc&limit=50`,
       {
         headers: {
           "apikey": SUPABASE_ANON_KEY,
@@ -98,9 +86,8 @@ async function fetchDiaryMetaForPath(pathname) {
       .replace(/\s+/g, " ")
       .trim();
     const description = rawDesc.slice(0, 160) || "परिक्रमापथ पर यात्री का लाइव अनुभव पढ़ें।";
-    const image = extractFirstPhoto(matched.photo_urls);
 
-    return { title, description, image };
+    return { title, description, image: ALWAYS_OG_IMAGE };
   } catch (e) {
     return null;
   }
@@ -113,16 +100,21 @@ async function serveIndexWithDynamicOg(request, env, ogOverride = null) {
   const url = new URL(request.url);
   const ogTitle = ogOverride?.title || "🕉️ Parikramapath - भारत की संपूर्ण तीर्थ एवं परिक्रमा मार्गदर्शिका";
   const ogDesc = ogOverride?.description || "नर्मदा, गिरनार, ब्रज 84 कोस सहित भारत की प्रमुख परिक्रमाओं के लाइव GPS रूट, आश्रम, सदाव्रत भोजन, आरती और नियमों की संपूर्ण जानकारी।";
-  const ogImage = ogOverride?.image || DEFAULT_OG_IMAGE;
   const ogUrl = url.toString();
 
   html = html
     .replace(/<meta property="og:title" content="[^"]*">/i, `<meta property="og:title" content="${escapeHtmlAttr(ogTitle)}">`)
     .replace(/<meta property="og:description" content="[^"]*">/i, `<meta property="og:description" content="${escapeHtmlAttr(ogDesc)}">`)
-    .replace(/<meta property="og:image" content="[^"]*">/i, `<meta property="og:image" content="${escapeHtmlAttr(ogImage)}">`)
+    .replace(/<meta property="og:image" content="[^"]*">/i, `<meta property="og:image" content="${ALWAYS_OG_IMAGE}">`)
     .replace(/<meta property="og:url" content="[^"]*">/i, `<meta property="og:url" content="${escapeHtmlAttr(ogUrl)}">`)
     .replace(/<meta name="twitter:title" content="[^"]*">/i, `<meta name="twitter:title" content="${escapeHtmlAttr(ogTitle)}">`)
     .replace(/<meta name="twitter:description" content="[^"]*">/i, `<meta name="twitter:description" content="${escapeHtmlAttr(ogDesc)}">`);
+
+  if (/<meta name="twitter:image"/i.test(html)) {
+    html = html.replace(/<meta name="twitter:image" content="[^"]*">/i, `<meta name="twitter:image" content="${ALWAYS_OG_IMAGE}">`);
+  } else {
+    html = html.replace(/<meta name="twitter:card" content="[^"]*">/i, `<meta name="twitter:card" content="summary_large_image">\n    <meta name="twitter:image" content="${ALWAYS_OG_IMAGE}">`);
+  }
 
   if (ogOverride?.title) {
     html = html.replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtmlAttr(ogTitle)} | Parikramapath.in</title>`);
@@ -263,13 +255,13 @@ ${allEntries}
       });
     }
 
-    // 2. Clean BlogPost routes (/diary/<user>/<yatra>/<day>) -> dynamic OG + index.html
+    // 2. Clean BlogPost routes (/diary/<user>/<yatra>/<day>) -> dynamic OG + icon-512.png
     if (pathnameLower.startsWith("/diary/") && env && env.ASSETS) {
       const diaryMeta = await fetchDiaryMetaForPath(url.pathname);
       return serveIndexWithDynamicOg(request, env, diaryMeta);
     }
 
-    // 3. Root / Home -> serve index.html with configured OG image/tags
+    // 3. Root / Home -> serve index.html with icon-512.png
     if ((url.pathname === "/" || pathnameLower === "/index.html") && env && env.ASSETS) {
       return serveIndexWithDynamicOg(request, env, null);
     }
