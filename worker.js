@@ -94,13 +94,27 @@ async function fetchDiaryMetaForPath(pathname) {
 }
 
 async function serveIndexWithDynamicOg(request, env, ogOverride = null) {
-  const assetRes = await env.ASSETS.fetch(new Request(new URL("/index.html", request.url), request));
-  let html = await assetRes.text();
-
   const url = new URL(request.url);
+  // Root "/" se fetch karein taaki Cloudflare Assets /index.html -> / par 307 empty redirect na de
+  let assetRes = await env.ASSETS.fetch(new Request(`${url.origin}/`, { method: "GET" }));
+  if (assetRes.status >= 300 && assetRes.status < 400 && assetRes.headers.get("Location")) {
+    const locUrl = new URL(assetRes.headers.get("Location"), url.origin);
+    assetRes = await env.ASSETS.fetch(new Request(locUrl.toString(), { method: "GET" }));
+  }
+
+  let html = await assetRes.text();
+  if (!html || html.trim().length === 0) {
+    return env.ASSETS.fetch(new Request(`${url.origin}/`, { method: "GET" }));
+  }
+
   const ogTitle = ogOverride?.title || "🕉️ Parikramapath - भारत की संपूर्ण तीर्थ एवं परिक्रमा मार्गदर्शिका";
   const ogDesc = ogOverride?.description || "नर्मदा, गिरनार, ब्रज 84 कोस सहित भारत की प्रमुख परिक्रमाओं के लाइव GPS रूट, आश्रम, सदाव्रत भोजन, आरती और नियमों की संपूर्ण जानकारी।";
   const ogUrl = url.toString();
+
+  // Sub-path (/diary/...) par relative CSS/JS sahi load hone ke liye <base href="/"> add karein
+  if (!/<base\s/i.test(html)) {
+    html = html.replace(/<head>/i, `<head>\n    <base href="/">`);
+  }
 
   html = html
     .replace(/<meta property="og:title" content="[^"]*">/i, `<meta property="og:title" content="${escapeHtmlAttr(ogTitle)}">`)
@@ -134,7 +148,7 @@ export default {
     const url = new URL(request.url);
     const pathnameLower = url.pathname.toLowerCase();
 
-    // 1. Automatic Dynamic /sitemap.xml (Yatras + Approved Diary Posts)
+    // 1. Automatic Dynamic /sitemap.xml
     if (url.pathname === "/sitemap.xml") {
       const fallbackSlugs = [
         "narmada-parikrama",
@@ -255,7 +269,7 @@ ${allEntries}
       });
     }
 
-    // 2. Clean BlogPost routes (/diary/<user>/<yatra>/<day>) -> dynamic OG + icon-512.png
+    // 2. Clean BlogPost routes (/diary/<user>/<yatra>/<day>) -> dynamic OG + index.html
     if (pathnameLower.startsWith("/diary/") && env && env.ASSETS) {
       const diaryMeta = await fetchDiaryMetaForPath(url.pathname);
       return serveIndexWithDynamicOg(request, env, diaryMeta);
