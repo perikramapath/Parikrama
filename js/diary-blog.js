@@ -87,7 +87,7 @@ window.ParikramaDiaryBlog = (function() {
                 .eq('status', 'approved')
                 .order('created_at', { ascending: false });
 
-            if (!error && Array.isArray(data)) {
+            if (!error && Array.isArray(data) && data.length > 0) {
                 allApprovedDiariesCache = data;
             }
         } catch (e) {}
@@ -218,7 +218,7 @@ window.ParikramaDiaryBlog = (function() {
         const cleanPath = buildDiaryCleanPath(diary);
         try {
             if (window.location.pathname !== cleanPath) {
-                window.history.pushState({ diaryId: diary.id }, '', cleanPath);
+                window.history.replaceState({ diaryId: diary.id }, '', cleanPath);
             }
         } catch (e) {}
 
@@ -232,7 +232,6 @@ window.ParikramaDiaryBlog = (function() {
                </div>`
             : '';
 
-        // Same yatri + same yatra other days
         const sameYatriOtherDays = allDiaries
             .filter(item =>
                 String(item.id) !== String(diary.id) &&
@@ -395,7 +394,8 @@ window.ParikramaDiaryBlog = (function() {
         ) || diaries.find(d =>
             slugifyPart(d.yatri_name) === parsed.userSlug &&
             getDiaryDaySlug(d) === parsed.daySlug
-        ) || diaries.find(d => getDiaryDaySlug(d) === parsed.daySlug);
+        ) || diaries.find(d => getDiaryDaySlug(d) === parsed.daySlug)
+          || diaries[0];
 
         if (matched) {
             renderSingleDiaryBlogPost(matched, diaries);
@@ -407,7 +407,8 @@ window.ParikramaDiaryBlog = (function() {
     });
 
     window.addEventListener('DOMContentLoaded', () => {
-        setTimeout(handleInitialRouteIfDiary, 700);
+        setTimeout(handleInitialRouteIfDiary, 300);
+        setTimeout(handleInitialRouteIfDiary, 1200);
     });
 
     return {
