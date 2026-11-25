@@ -1023,6 +1023,33 @@ async function deleteDonorEntry(donorId) {
 // =========================================================
 // 6. IMGBB API KEY & PUBLIC YATRA DIARY APPROVAL SYSTEM
 // =========================================================
+function deduplicateDayDiaries(list) {
+    const mapByKey = new Map();
+    (list || []).forEach(item => {
+        const k = `${String(item.yatra_id || '')}_${String(item.yatri_name || '').trim().toLowerCase()}_${parseInt(item.day_number, 10) || 1}`;
+        const prev = mapByKey.get(k);
+        if (!prev) {
+            mapByKey.set(k, { ...item });
+        } else {
+            let pPhotos = prev.photo_urls;
+            let cPhotos = item.photo_urls;
+            if (typeof pPhotos === 'string') { try { pPhotos = JSON.parse(pPhotos); } catch (e) { pPhotos = []; } }
+            if (typeof cPhotos === 'string') { try { cPhotos = JSON.parse(cPhotos); } catch (e) { cPhotos = []; } }
+            const mergedPhotos = (Array.isArray(cPhotos) && cPhotos.length > 0)
+                ? cPhotos
+                : (Array.isArray(pPhotos) ? pPhotos : []);
+
+            mapByKey.set(k, {
+                ...prev,
+                ...item,
+                experience_text: item.experience_text || prev.experience_text || '',
+                photo_urls: mergedPhotos
+            });
+        }
+    });
+    return Array.from(mapByKey.values());
+}
+
 async function loadAppImgbbSettings() {
     try {
         const { data } = await supabaseClient
@@ -1058,7 +1085,6 @@ window.saveAdminImgbbApiKey = async function() {
     alert("✅ ImgBB API Key सुरक्षित हो गई है! अब यात्री डायरी में 1-2 फोटो अपलोड कर सकेंगे।");
 };
 
-// Browser-side image compression + ImgBB upload helper
 window.uploadImageToImgBB = async function(file) {
     if (!file) return null;
     if (!window.appImgbbApiKeyCache) {
@@ -1156,19 +1182,21 @@ async function renderAdminDiaryApprovalSection() {
         .from('yatra_diaries')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(30);
+        .limit(40);
 
-    if (error || !diaries || diaries.length === 0) {
+    const uniqueDiaries = deduplicateDayDiaries(diaries).slice(0, 30);
+
+    if (error || !uniqueDiaries || uniqueDiaries.length === 0) {
         listEl.innerHTML = '<small style="color:#666;">अभी कोई यात्रा डायरी सबमिट नहीं हुई है।</small>';
         return;
     }
 
-    listEl.innerHTML = diaries.map(d => {
+    listEl.innerHTML = uniqueDiaries.map(d => {
         let photos = d.photo_urls;
         if (typeof photos === 'string') {
             try { photos = JSON.parse(photos); } catch (e) { photos = []; }
         }
-        photos = Array.isArray(photos) ? photos : [];
+        photos = Array.isArray(photos) ? photos.slice(0, 2) : [];
         const imgsHtml = photos.length > 0
             ? `<div style="display:flex; gap:6px; margin:6px 0;">${photos.map(u => `<a href="${u}" target="_blank"><img src="${u}" style="width:62px; height:62px; object-fit:cover; border-radius:6px; border:1px solid #ccc;"></a>`).join('')}</div>`
             : '';
@@ -1239,9 +1267,11 @@ async function loadPublicYatraDiariesWall() {
         .select('*')
         .eq('status', 'approved')
         .order('created_at', { ascending: false })
-        .limit(12);
+        .limit(24);
 
-    if (!approvedDiaries || approvedDiaries.length === 0) {
+    const uniqueDiaries = deduplicateDayDiaries(approvedDiaries).slice(0, 12);
+
+    if (!uniqueDiaries || uniqueDiaries.length === 0) {
         diarySection.style.display = 'none';
         return;
     }
@@ -1250,12 +1280,12 @@ async function loadPublicYatraDiariesWall() {
     diarySection.innerHTML = `
         <h2 style="font-size:17px; color:#2e7d32; margin:0 0 10px 0;">📖 यात्रियों के लाइव अनुभव (Yatra Diaries)</h2>
         <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:10px;">
-            ${approvedDiaries.map(d => {
+            ${uniqueDiaries.map(d => {
                 let photos = d.photo_urls;
                 if (typeof photos === 'string') {
                     try { photos = JSON.parse(photos); } catch (e) { photos = []; }
                 }
-                photos = Array.isArray(photos) ? photos : [];
+                photos = Array.isArray(photos) ? photos.slice(0, 2) : [];
                 const photoGrid = photos.length > 0
                     ? `<div style="display:flex; gap:6px; margin-top:7px;">${photos.map(u => `<a href="${u}" target="_blank" style="flex:1;"><img src="${u}" alt="${d.yatri_name}" style="width:100%; height:95px; object-fit:cover; border-radius:7px; border:1px solid #ddd;"></a>`).join('')}</div>`
                     : '';
