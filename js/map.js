@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - OFFLINE AUTO-SYNC, LIVE GPS HUD & NEXT-PADAV SEARCH
+// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & NEXT-PADAV SEARCH
 // =========================================================
 
 window.map = null;
@@ -28,6 +28,7 @@ window.lastLiveNavCalcMs = 0;
 window.lastBatterySaverGpsPt = null;
 window.adminYatriRealtimeSub = null;
 window.adminVisitorRealtimeSub = null;
+window.isExplicitlyChangingStartPoint = false;
 
 function getOrCreateGuestVisitorId() {
     try {
@@ -43,7 +44,7 @@ function getOrCreateGuestVisitorId() {
 }
 
 // ---------------------------------------------------------
-// STARTING POINT PERSISTENCE (100% LOCALSTORAGE PER YATRA)
+// PERMANENT STARTING POINT PERSISTENCE (100% LOCKED PER YATRA)
 // ---------------------------------------------------------
 function getSavedStartPadavKey(yatra) {
     const slug = (yatra?.slug || yatra?.id || 'default').toString().toLowerCase().trim();
@@ -57,7 +58,8 @@ function saveUserStartPadavLocal(yatra, padavObj) {
             id: padavObj.id,
             name: padavObj.name,
             lat: padavObj.lat,
-            lng: padavObj.lng
+            lng: padavObj.lng,
+            locked: true
         }));
     } catch (e) {}
 }
@@ -72,6 +74,48 @@ function getSavedUserStartPadavLocal(yatra) {
     }
 }
 
+// Jab user upar wale "Start Point" button ya Menu se explicit change kare tabhi Gate khulega
+window.openStartPointChanger = function() {
+    window.isExplicitlyChangingStartPoint = true;
+    const mainApp = document.getElementById('mainAppContainer');
+    const spGate = document.getElementById('startPointGate');
+    if (mainApp) mainApp.style.display = 'none';
+    if (spGate) spGate.style.display = 'flex';
+};
+
+// Auto-bypass StartPointGate agar starting point pehle se permanently set/locked hai
+(function attachPermanentStartLockGuard() {
+    if (typeof MutationObserver === 'undefined') return;
+    document.addEventListener('DOMContentLoaded', () => {
+        const spGate = document.getElementById('startPointGate');
+        if (!spGate) return;
+
+        const observer = new MutationObserver(() => {
+            if (spGate.style.display !== 'none' && !window.isExplicitlyChangingStartPoint) {
+                if (window.activeYatra) {
+                    const savedStart = window.selectedStartPadav || getSavedUserStartPadavLocal(window.activeYatra);
+                    if (savedStart && savedStart.id) {
+                        window.selectedStartPadav = savedStart;
+                        const badgeEl = document.getElementById('activeStartBadge');
+                        if (badgeEl) badgeEl.innerText = savedStart.name;
+
+                        spGate.style.display = 'none';
+                        if (typeof launchYatraMap === 'function') {
+                            launchYatraMap();
+                        } else {
+                            const mainApp = document.getElementById('mainAppContainer');
+                            if (mainApp) mainApp.style.display = 'block';
+                            initAndLoadIsolatedMap();
+                        }
+                    }
+                }
+            }
+        });
+
+        observer.observe(spGate, { attributes: true, attributeFilter: ['style'] });
+    });
+})();
+
 window.setManualStartPadav = function(padavId) {
     if (!window.activeYatra) return;
     const found = (window.activeYatraPadavs || []).find(p => String(p.id) === String(padavId));
@@ -81,9 +125,14 @@ window.setManualStartPadav = function(padavId) {
     window.focusedOriginPadavId = found.id;
     window.passedPadavIds.delete(found.id);
     window.abandonedBranchIds.delete(found.id);
+    window.isExplicitlyChangingStartPoint = false;
     saveUserStartPadavLocal(window.activeYatra, found);
+
+    const badgeEl = document.getElementById('activeStartBadge');
+    if (badgeEl) badgeEl.innerText = found.name;
+
     renderIsolatedPadavs(window.activeYatraPadavs);
-    alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है।`);
+    alert(`🚩 "${found.name}" को आपका स्थायी प्रारंभिक पड़ाव लॉक कर दिया गया है।`);
 };
 
 // ---------------------------------------------------------
@@ -134,7 +183,6 @@ function injectNextPadavPickerSearch() {
     }
 }
 
-// Observe addPadavModal opening so nextPadavPicker always gets search input
 (function attachNextPadavSearchObserver() {
     if (typeof MutationObserver === 'undefined') return;
     document.addEventListener('DOMContentLoaded', () => {
@@ -445,7 +493,6 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
     const cacheKey = `${fromPadav.id}_${toPadav.id}_${routeIdx}`;
     if (window.osrmDistanceCache[cacheKey]) return window.osrmDistanceCache[cacheKey];
 
-    // Offline mode me OSRM call skip karein
     if (!navigator.onLine) return null;
 
     try {
@@ -1013,7 +1060,6 @@ function startYatriLiveProgressTracker() {
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
 
-        // Battery Saver Mode: har 20m chalne par update karein
         if (window.ParikramaOffline && window.ParikramaOffline.isBatterySaverEnabled() && window.lastBatterySaverGpsPt) {
             const movedSinceLast = getDistanceInMeters(window.lastBatterySaverGpsPt[0], window.lastBatterySaverGpsPt[1], uLat, uLng);
             if (movedSinceLast < 20) return;
@@ -1105,6 +1151,8 @@ function startYatriLiveProgressTracker() {
 async function initAndLoadIsolatedMap() {
     if (!window.activeYatra) return;
 
+    window.isExplicitlyChangingStartPoint = false;
+
     if (window.selectedStartPadav) {
         saveUserStartPadavLocal(window.activeYatra, window.selectedStartPadav);
     } else {
@@ -1112,6 +1160,11 @@ async function initAndLoadIsolatedMap() {
         if (savedStart) {
             window.selectedStartPadav = savedStart;
         }
+    }
+
+    const badgeEl = document.getElementById('activeStartBadge');
+    if (badgeEl && window.selectedStartPadav) {
+        badgeEl.innerText = window.selectedStartPadav.name;
     }
 
     window.hasCenteredOnLiveGps = false;
@@ -1203,7 +1256,6 @@ async function initAndLoadIsolatedMap() {
         } catch (e) {}
     }
 
-    // Agar offline hai ya online se data empty aaya to IndexedDB offline pack se restore karein
     if ((!navigator.onLine || loadedPadavs.length === 0) && window.ParikramaOffline) {
         const offlinePack = await window.ParikramaOffline.getYatraOfflinePack(window.activeYatra.id || window.activeYatra.slug);
         if (offlinePack) {
@@ -1217,7 +1269,6 @@ async function initAndLoadIsolatedMap() {
         }
     }
 
-    // Online hone par poori yatra (padavs + custom routes + map tiles) ko automatic offline save karein
     if (navigator.onLine && window.ParikramaOffline && loadedPadavs.length > 0) {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, loadedPadavs, loadedRoutes);
     }
@@ -1406,7 +1457,6 @@ async function drawAutoPadavConnectingLines(visibleList) {
             } catch (e) {}
         }
 
-        // Offline ya cached road line fallback (bina internet ke bhi disha-suchak line dikhegi)
         if (!hasCustomLine) {
             const pairCacheKey = `${currentOriginPadav.id}_${targetP.id}_${idx}`;
             if (window.osrmGeometryCache[pairCacheKey]) {
