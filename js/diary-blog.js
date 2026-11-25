@@ -4,7 +4,7 @@
 // =========================================================
 
 window.ParikramaDiaryBlog = (function() {
-    let allApprovedDiariesCache = [];
+    let allDiariesCache = [];
 
     const YATRA_SLUG_ALIASES = {
         'नर्मदा परिक्रमा': 'narmada_parikrama',
@@ -56,6 +56,7 @@ window.ParikramaDiaryBlog = (function() {
         const parts = pathname.split('/').filter(Boolean);
         if (parts.length >= 4 && parts[0].toLowerCase() === 'diary') {
             return {
+                rawPath: pathname,
                 userSlug: parts[1].toLowerCase(),
                 yatraSlug: parts[2].toLowerCase(),
                 daySlug: parts[3].toLowerCase()
@@ -72,27 +73,39 @@ window.ParikramaDiaryBlog = (function() {
         return Array.isArray(arr) ? arr.filter(Boolean).slice(0, 2) : [];
     }
 
-    async function fetchApprovedDiaries(forceRefresh = false) {
-        if (!forceRefresh && Array.isArray(allApprovedDiariesCache) && allApprovedDiariesCache.length > 0) {
-            return allApprovedDiariesCache;
+    async function fetchDiariesForBlog(forceRefresh = false) {
+        if (!forceRefresh && Array.isArray(allDiariesCache) && allDiariesCache.length > 0) {
+            return allDiariesCache;
         }
         if (typeof supabaseClient === 'undefined') {
-            return allApprovedDiariesCache;
+            return allDiariesCache;
         }
 
         try {
-            const { data, error } = await supabaseClient
+            const { data: approvedData, error: appErr } = await supabaseClient
                 .from('yatra_diaries')
                 .select('*')
                 .eq('status', 'approved')
                 .order('created_at', { ascending: false });
 
-            if (!error && Array.isArray(data) && data.length > 0) {
-                allApprovedDiariesCache = data;
+            if (!appErr && Array.isArray(approvedData) && approvedData.length > 0) {
+                allDiariesCache = approvedData;
+                return allDiariesCache;
+            }
+
+            // Fallback: यदि अभी कोई approved रो नहीं मिली तो उपलब्ध रिकॉर्ड देखें
+            const { data: anyData, error: anyErr } = await supabaseClient
+                .from('yatra_diaries')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(25);
+
+            if (!anyErr && Array.isArray(anyData) && anyData.length > 0) {
+                allDiariesCache = anyData;
             }
         } catch (e) {}
 
-        return allApprovedDiariesCache;
+        return allDiariesCache;
     }
 
     function updateSeoForDiaryPost(diary) {
@@ -166,7 +179,7 @@ window.ParikramaDiaryBlog = (function() {
     }
 
     window.shareDiaryPost = async function(diaryId) {
-        const list = await fetchApprovedDiaries();
+        const list = await fetchDiariesForBlog();
         const d = list.find(item => String(item.id) === String(diaryId));
         if (!d) return;
 
@@ -190,7 +203,7 @@ window.ParikramaDiaryBlog = (function() {
     };
 
     window.copyDiaryLink = function(diaryId) {
-        const list = allApprovedDiariesCache || [];
+        const list = allDiariesCache || [];
         const d = list.find(item => String(item.id) === String(diaryId));
         if (!d) return;
         const shareUrl = buildDiaryFullUrl(d);
@@ -211,8 +224,16 @@ window.ParikramaDiaryBlog = (function() {
         if (!container || !diary) return;
 
         const yatraGate = document.getElementById('yatraGate');
-        if (yatraGate && yatraGate.style.display === 'none') {
+        if (yatraGate) {
             yatraGate.style.display = 'flex';
+        }
+        const mainApp = document.getElementById('mainAppContainer');
+        if (mainApp) {
+            mainApp.style.display = 'none';
+        }
+        const startGate = document.getElementById('startPointGate');
+        if (startGate) {
+            startGate.style.display = 'none';
         }
 
         const cleanPath = buildDiaryCleanPath(diary);
@@ -232,7 +253,7 @@ window.ParikramaDiaryBlog = (function() {
                </div>`
             : '';
 
-        const sameYatriOtherDays = allDiaries
+        const sameYatriOtherDays = (allDiaries || [])
             .filter(item =>
                 String(item.id) !== String(diary.id) &&
                 slugifyPart(item.yatri_name) === slugifyPart(diary.yatri_name) &&
@@ -312,7 +333,7 @@ window.ParikramaDiaryBlog = (function() {
         container.style.display = 'block';
         container.innerHTML = `<div style="background:#f9fbe7; border:1.5px solid #c5e1a5; border-radius:12px; padding:12px; font-size:13px;">⏳ यात्रियों की डायरियाँ लोड हो रही हैं...</div>`;
 
-        const diaries = await fetchApprovedDiaries(true);
+        const diaries = await fetchDiariesForBlog(true);
         if (!diaries || diaries.length === 0) {
             container.innerHTML = `
                 <div style="background:#f9fbe7; border:1.5px solid #c5e1a5; border-radius:12px; padding:12px; font-size:13px; color:#444;">
@@ -356,7 +377,7 @@ window.ParikramaDiaryBlog = (function() {
     }
 
     async function openDiaryById(diaryId) {
-        const diaries = await fetchApprovedDiaries();
+        const diaries = await fetchDiariesForBlog();
         const found = diaries.find(d => String(d.id) === String(diaryId));
         if (found) {
             renderSingleDiaryBlogPost(found, diaries);
@@ -381,7 +402,12 @@ window.ParikramaDiaryBlog = (function() {
         const parsed = parseDiaryPathFromLocation();
         if (!parsed) return;
 
-        const diaries = await fetchApprovedDiaries(true);
+        const container = ensureContainer();
+        if (container && container.style.display === 'block' && container.querySelector('article')) {
+            return;
+        }
+
+        const diaries = await fetchDiariesForBlog(true);
         if (!diaries || diaries.length === 0) return;
 
         const matched = diaries.find(d =>
@@ -407,8 +433,12 @@ window.ParikramaDiaryBlog = (function() {
     });
 
     window.addEventListener('DOMContentLoaded', () => {
-        setTimeout(handleInitialRouteIfDiary, 300);
-        setTimeout(handleInitialRouteIfDiary, 1200);
+        setTimeout(handleInitialRouteIfDiary, 400);
+        setTimeout(handleInitialRouteIfDiary, 1500);
+    });
+
+    window.addEventListener('load', () => {
+        setTimeout(handleInitialRouteIfDiary, 600);
     });
 
     return {
