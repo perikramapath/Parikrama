@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - AUTOMATIC OFFLINE MANAGER + DAY-WISE EDITABLE YATRA DIARY
+// PARIKRAMAPATH - AUTOMATIC OFFLINE MANAGER + DAY-WISE EDITABLE & DELETABLE YATRA DIARY
 // =========================================================
 
 window.ParikramaOffline = (function() {
@@ -198,7 +198,7 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 2. DAY-WISE AUTOMATIC + EDITABLE JOURNEY DIARY (DATE + TIME)
+    // 2. DAY-WISE AUTOMATIC + EDITABLE + DELETABLE JOURNEY DIARY
     // =========================================================
     async function getAllSavedDiaries() {
         try {
@@ -245,6 +245,35 @@ window.ParikramaOffline = (function() {
         });
     }
 
+    async function deleteDiaryEntryFromLocalDB(diaryKey) {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_DIARIES, 'readwrite');
+            tx.objectStore(STORE_DIARIES).delete(diaryKey);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = (e) => reject(e.target.error);
+        });
+    }
+
+    function getDeletedDiarySignatures() {
+        try {
+            return JSON.parse(localStorage.getItem('pp_deleted_diary_sigs') || '[]');
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function markDiarySignatureDeleted(sig) {
+        if (!sig) return;
+        try {
+            const list = getDeletedDiarySignatures();
+            if (!list.includes(sig)) {
+                list.push(sig);
+                localStorage.setItem('pp_deleted_diary_sigs', JSON.stringify(list.slice(-100)));
+            }
+        } catch (e) {}
+    }
+
     async function syncRemoteDiariesToLocal(yatraObj = null) {
         if (!navigator.onLine || typeof supabaseClient === 'undefined') return;
         try {
@@ -268,11 +297,19 @@ window.ParikramaOffline = (function() {
             const { data, error } = await query;
             if (error || !Array.isArray(data) || data.length === 0) return;
 
+            const deletedSigs = getDeletedDiarySignatures();
             const existingAll = await getAllSavedDiaries();
+
             for (const row of data) {
                 const yId = String(row.yatra_id || (yatraObj && yatraObj.id) || 'general');
                 const dDate = row.diary_date || getTodayDateStr();
                 const dayNum = parseInt(row.day_number, 10) || 1;
+                const sig = `${yId}_${dayNum}_${dDate}`;
+
+                if (deletedSigs.includes(sig) || (row.id && deletedSigs.includes(`id_${row.id}`))) {
+                    continue;
+                }
+
                 const dKey = `${yId}_${dDate}_day${dayNum}`;
 
                 const localMatch = existingAll.find(x =>
@@ -290,6 +327,8 @@ window.ParikramaOffline = (function() {
                 const merged = {
                     ...(localMatch || {}),
                     diary_key: localMatch ? localMatch.diary_key : dKey,
+                    remote_id: row.id || (localMatch && localMatch.remote_id) || null,
+                    yatri_name: row.yatri_name || (localMatch && localMatch.yatri_name) || '',
                     yatra_id: yId,
                     yatra_name: row.yatra_name || (yatraObj && (yatraObj.name_hi || yatraObj.name)) || 'यात्रा',
                     day_number: dayNum,
@@ -425,7 +464,7 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 3. OFFLINE ACTION OUTBOX (UPDATE EXISTING DAY POST, NO DUPLICATES)
+    // 3. OFFLINE ACTION OUTBOX (UPDATE / DELETE REMOTE DIARY)
     // =========================================================
     async function queueOfflineAction(actionType, payload) {
         try {
@@ -438,6 +477,27 @@ window.ParikramaOffline = (function() {
             });
             updateOfflineStatusBadge('queued');
         } catch (e) {}
+    }
+
+    async function deleteRemoteDiaryFromSupabase(p) {
+        if (typeof supabaseClient === 'undefined') return;
+        if (p.remote_id) {
+            await supabaseClient.from('yatra_diaries').delete().eq('id', p.remote_id);
+        }
+        if (p.yatra_id && p.day_number) {
+            let delQ = supabaseClient
+                .from('yatra_diaries')
+                .delete()
+                .eq('yatra_id', String(p.yatra_id))
+                .eq('day_number', parseInt(p.day_number, 10) || 1);
+
+            if (p.user_id) {
+                delQ = delQ.eq('user_id', p.user_id);
+            } else if (p.yatri_name) {
+                delQ = delQ.eq('yatri_name', p.yatri_name);
+            }
+            await delQ;
+        }
     }
 
     async function syncOfflineOutbox() {
@@ -462,6 +522,8 @@ window.ParikramaOffline = (function() {
                         await supabaseClient.from('padavs').update(rest).eq('id', id);
                     } else if (item.action_type === 'publish_diary') {
                         await submitDiaryPayloadToSupabase(item.payload);
+                    } else if (item.action_type === 'delete_diary') {
+                        await deleteRemoteDiaryFromSupabase(item.payload);
                     }
                     const delTx = db.transaction(STORE_OUTBOX, 'readwrite');
                     delTx.objectStore(STORE_OUTBOX).delete(item.id);
@@ -512,8 +574,11 @@ window.ParikramaOffline = (function() {
             status: 'pending'
         };
 
+        let savedId = null;
+
         if (Array.isArray(existingRows) && existingRows.length > 0) {
             const primaryId = existingRows[0].id;
+            savedId = primaryId;
             const { error: updErr } = await supabaseClient
                 .from('yatra_diaries')
                 .update(row)
@@ -525,13 +590,15 @@ window.ParikramaOffline = (function() {
                 await supabaseClient.from('yatra_diaries').delete().in('id', extraIds);
             }
         } else {
-            const { error: insErr } = await supabaseClient
+            const { data: insData, error: insErr } = await supabaseClient
                 .from('yatra_diaries')
-                .insert([row]);
+                .insert([row])
+                .select('id');
             if (insErr) throw insErr;
+            if (insData && insData[0]) savedId = insData[0].id;
         }
 
-        return row.photo_urls;
+        return { photo_urls: row.photo_urls, remote_id: savedId };
     }
 
     // =========================================================
@@ -556,15 +623,61 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 5. DAY-WISE EDITABLE JOURNEY DIARY MODAL & IMGBB UPLOAD UI
+    // 5. DAY-WISE EDITABLE & DELETABLE JOURNEY DIARY MODAL UI
     // =========================================================
-    async function openOfflineJourneyDiary() {
+    async function deleteDiaryDayRecord(diaryKey) {
+        const all = await getAllSavedDiaries();
+        const rec = all.find(d => d.diary_key === diaryKey);
+        if (!rec) return;
+
+        const label = `${rec.yatra_name ? rec.yatra_name + ' — ' : ''}Day ${rec.day_number} (${rec.diary_date || ''})`;
+        if (!confirm(`🗑️ क्या आप वाकई इस यात्रा रिकॉर्ड को हमेशा के लिए हटाना चाहते हैं?\n\n${label}`)) {
+            return;
+        }
+
+        const yId = String(rec.yatra_id || '');
+        const dayNum = parseInt(rec.day_number, 10) || 1;
+        const dDate = rec.diary_date || '';
+        markDiarySignatureDeleted(`${yId}_${dayNum}_${dDate}`);
+        if (rec.remote_id) {
+            markDiarySignatureDeleted(`id_${rec.remote_id}`);
+        }
+
+        await deleteDiaryEntryFromLocalDB(diaryKey);
+
+        const yatriName = (rec.yatri_name || localStorage.getItem('pp_diary_yatri_name') || '').trim();
+        const delPayload = {
+            remote_id: rec.remote_id || null,
+            user_id: window.currentUser ? window.currentUser.id : null,
+            yatri_name: yatriName,
+            yatra_id: yId,
+            day_number: dayNum
+        };
+
+        if (navigator.onLine) {
+            try {
+                await deleteRemoteDiaryFromSupabase(delPayload);
+            } catch (e) {
+                await queueOfflineAction('delete_diary', delPayload);
+            }
+        } else {
+            await queueOfflineAction('delete_diary', delPayload);
+        }
+
+        await openOfflineJourneyDiary(true);
+
+        if (typeof window.loadPublicYatraDiariesWall === 'function') {
+            window.loadPublicYatraDiariesWall();
+        }
+    }
+
+    async function openOfflineJourneyDiary(skipAutoCreate = false) {
         const bodyEl = document.getElementById('offlineDiaryBody');
         if (!bodyEl) return;
 
         const yatra = window.activeYatra;
         await syncRemoteDiariesToLocal(yatra);
-        if (yatra) {
+        if (yatra && !skipAutoCreate) {
             await ensureTodayDiaryEntry(yatra);
         }
 
@@ -609,11 +722,16 @@ window.ParikramaOffline = (function() {
 
                 html += `
                     <div style="background:#ffffff; border:1px solid #ffe0b2; border-left:4px solid #ff9800; border-radius:8px; padding:10px; margin-bottom:9px; font-size:12.5px;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px;">
                             <b style="color:#d84315; font-size:13.5px;">${d.yatra_name ? d.yatra_name + ' • ' : ''}Day ${d.day_number} • 📅 ${d.diary_date}</b>
-                            <button type="button" onclick="ParikramaOffline.openDiaryDayEditor('${d.diary_key}')" style="background:#ffc107; color:#000; border:none; padding:4px 9px; border-radius:5px; font-size:11.5px; font-weight:bold; cursor:pointer;">
-                                ✏️ Edit / अनुभव लिखें
-                            </button>
+                            <div style="display:flex; gap:5px;">
+                                <button type="button" onclick="ParikramaOffline.openDiaryDayEditor('${d.diary_key}')" style="background:#ffc107; color:#000; border:none; padding:4px 8px; border-radius:5px; font-size:11px; font-weight:bold; cursor:pointer;">
+                                    ✏️ Edit
+                                </button>
+                                <button type="button" onclick="ParikramaOffline.deleteDiaryDayRecord('${d.diary_key}')" style="background:#dc3545; color:#fff; border:none; padding:4px 8px; border-radius:5px; font-size:11px; font-weight:bold; cursor:pointer;" title="यह दिन हटाएं">
+                                    🗑️ Delete
+                                </button>
+                            </div>
                         </div>
                         <div style="color:#333; line-height:1.55;">
                             <span>🚶 <b>प्रस्थान:</b> ${d.start_place || '-'} (${d.start_time || '--:--'})</span><br>
@@ -651,7 +769,7 @@ window.ParikramaOffline = (function() {
 
         const defaultName = (window.currentProfile && window.currentProfile.full_name)
             ? window.currentProfile.full_name
-            : (localStorage.getItem('pp_diary_yatri_name') || '');
+            : (rec.yatri_name || localStorage.getItem('pp_diary_yatri_name') || '');
 
         editorBox.style.display = 'block';
         editorBox.innerHTML = `
@@ -737,6 +855,7 @@ window.ParikramaOffline = (function() {
         const yatriName = (document.getElementById('editDiaryYatriName')?.value || '').trim() || 'परिक्रमावासी';
         localStorage.setItem('pp_diary_yatri_name', yatriName);
 
+        rec.yatri_name = yatriName;
         rec.diary_date = document.getElementById('editDiaryDate')?.value || rec.diary_date;
         rec.distance_km = parseFloat(document.getElementById('editDiaryKm')?.value) || 0;
         rec.start_place = (document.getElementById('editDiaryStartPlace')?.value || '').trim();
@@ -796,8 +915,9 @@ window.ParikramaOffline = (function() {
 
             if (navigator.onLine) {
                 try {
-                    const finalUrls = await submitDiaryPayloadToSupabase(publicPayload);
-                    if (finalUrls && finalUrls.length > 0) rec.photo_urls = finalUrls;
+                    const result = await submitDiaryPayloadToSupabase(publicPayload);
+                    if (result?.photo_urls && result.photo_urls.length > 0) rec.photo_urls = result.photo_urls;
+                    if (result?.remote_id) rec.remote_id = result.remote_id;
                     rec.publish_status = 'submitted';
                 } catch (e) {
                     await queueOfflineAction('publish_diary', publicPayload);
@@ -864,6 +984,7 @@ window.ParikramaOffline = (function() {
         recordPadavStopInDiary,
         openDiaryDayEditor,
         saveDiaryDayEdit,
+        deleteDiaryDayRecord,
         queueOfflineAction,
         syncOfflineOutbox,
         isBatterySaverEnabled,
