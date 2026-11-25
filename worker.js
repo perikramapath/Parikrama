@@ -1,5 +1,18 @@
 // File Path: worker.js (Root folder mein, wrangler.jsonc ke "main" ke mutabik)
 
+const SUPABASE_URL = "https://ohazukqrnmiycvkldeeq.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9oYXp1a3Fybm1peWN2a2xkZWVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NzM5NTcsImV4cCI6MjExMDI0OTk1N30.6Hq116jqCeESuM9cWmmJljdAj6Mawjfnf_TCCFXDB-o";
+const DEFAULT_OG_IMAGE = "https://cdn-icons-png.flaticon.com/512/3658/3658756.png";
+
+function escapeHtmlAttr(str) {
+  return (str || "")
+    .toString()
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function slugifyDiaryPart(val) {
   const raw = (val || "").toString().toLowerCase().trim();
   if (!raw) return "";
@@ -28,6 +41,102 @@ function slugifyDiaryPart(val) {
   return cleaned || "yatra";
 }
 
+function extractFirstPhoto(photoUrls) {
+  let arr = photoUrls;
+  if (typeof arr === "string") {
+    try { arr = JSON.parse(arr); } catch (e) { arr = []; }
+  }
+  if (Array.isArray(arr)) {
+    const valid = arr.find(u => typeof u === "string" && /^https?:\/\//i.test(u.trim()));
+    if (valid) return valid.trim();
+  }
+  return DEFAULT_OG_IMAGE;
+}
+
+async function fetchDiaryMetaForPath(pathname) {
+  const parts = pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+  if (parts.length < 4 || parts[0].toLowerCase() !== "diary") return null;
+
+  const userSlug = parts[1].toLowerCase();
+  const yatraSlug = parts[2].toLowerCase();
+  const daySlug = parts[3].toLowerCase();
+  const dayNumFromSlug = parseInt(daySlug.replace(/^day-/i, ""), 10) || 1;
+
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/yatra_diaries?select=yatri_name,yatra_name,day_number,diary_date,start_place,night_halt,distance_km,experience_text,photo_urls&status=eq.approved&order=created_at.desc&limit=50`,
+      {
+        headers: {
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`
+        }
+      }
+    );
+
+    if (!resp.ok) return null;
+    const rows = await resp.json();
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+
+    const matched =
+      rows.find(d =>
+        slugifyDiaryPart(d.yatri_name) === userSlug &&
+        slugifyDiaryPart(d.yatra_name) === yatraSlug &&
+        (parseInt(d.day_number, 10) || 1) === dayNumFromSlug
+      ) ||
+      rows.find(d =>
+        slugifyDiaryPart(d.yatra_name) === yatraSlug &&
+        (parseInt(d.day_number, 10) || 1) === dayNumFromSlug
+      ) ||
+      rows.find(d => (parseInt(d.day_number, 10) || 1) === dayNumFromSlug) ||
+      rows[0];
+
+    if (!matched) return null;
+
+    const dNum = parseInt(matched.day_number, 10) || dayNumFromSlug;
+    const title = `🚩 ${matched.yatri_name || "परिक्रमावासी"} — ${matched.yatra_name || "यात्रा"} | Day ${dNum}`;
+    const rawDesc = (matched.experience_text || `${matched.start_place || ""} ➔ ${matched.night_halt || ""} (${matched.distance_km || 0} km)`)
+      .replace(/\s+/g, " ")
+      .trim();
+    const description = rawDesc.slice(0, 160) || "परिक्रमापथ पर यात्री का लाइव अनुभव पढ़ें।";
+    const image = extractFirstPhoto(matched.photo_urls);
+
+    return { title, description, image };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function serveIndexWithDynamicOg(request, env, ogOverride = null) {
+  const assetRes = await env.ASSETS.fetch(new Request(new URL("/index.html", request.url), request));
+  let html = await assetRes.text();
+
+  const url = new URL(request.url);
+  const ogTitle = ogOverride?.title || "🕉️ Parikramapath - भारत की संपूर्ण तीर्थ एवं परिक्रमा मार्गदर्शिका";
+  const ogDesc = ogOverride?.description || "नर्मदा, गिरनार, ब्रज 84 कोस सहित भारत की प्रमुख परिक्रमाओं के लाइव GPS रूट, आश्रम, सदाव्रत भोजन, आरती और नियमों की संपूर्ण जानकारी।";
+  const ogImage = ogOverride?.image || DEFAULT_OG_IMAGE;
+  const ogUrl = url.toString();
+
+  html = html
+    .replace(/<meta property="og:title" content="[^"]*">/i, `<meta property="og:title" content="${escapeHtmlAttr(ogTitle)}">`)
+    .replace(/<meta property="og:description" content="[^"]*">/i, `<meta property="og:description" content="${escapeHtmlAttr(ogDesc)}">`)
+    .replace(/<meta property="og:image" content="[^"]*">/i, `<meta property="og:image" content="${escapeHtmlAttr(ogImage)}">`)
+    .replace(/<meta property="og:url" content="[^"]*">/i, `<meta property="og:url" content="${escapeHtmlAttr(ogUrl)}">`)
+    .replace(/<meta name="twitter:title" content="[^"]*">/i, `<meta name="twitter:title" content="${escapeHtmlAttr(ogTitle)}">`)
+    .replace(/<meta name="twitter:description" content="[^"]*">/i, `<meta name="twitter:description" content="${escapeHtmlAttr(ogDesc)}">`);
+
+  if (ogOverride?.title) {
+    html = html.replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtmlAttr(ogTitle)} | Parikramapath.in</title>`);
+  }
+
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache"
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -35,9 +144,6 @@ export default {
 
     // 1. Automatic Dynamic /sitemap.xml (Yatras + Approved Diary Posts)
     if (url.pathname === "/sitemap.xml") {
-      const SUPABASE_URL = "https://ohazukqrnmiycvkldeeq.supabase.co";
-      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9oYXp1a3Fybm1peWN2a2xkZWVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NzM5NTcsImV4cCI6MjExMDI0OTk1N30.6Hq116jqCeESuM9cWmmJljdAj6Mawjfnf_TCCFXDB-o";
-
       const fallbackSlugs = [
         "narmada-parikrama",
         "braj-84-kos-parikrama",
@@ -61,7 +167,6 @@ export default {
         if (response.ok) {
           const yatras = await response.json();
 
-          // Narmada Parikrama ko hamesha sabse upar rakhein
           yatras.sort((a, b) => {
             const aIsNarmada = (a.slug || "").toLowerCase().includes("narmada");
             const bIsNarmada = (b.slug || "").toLowerCase().includes("narmada");
@@ -85,9 +190,7 @@ export default {
             })
             .join("\n");
         }
-      } catch (err) {
-        // Fallback use hoga
-      }
+      } catch (err) {}
 
       if (!yatraXmlEntries) {
         const today = new Date().toISOString().split("T")[0];
@@ -136,9 +239,7 @@ export default {
 
           diaryXmlEntries = diaryUrls.join("\n");
         }
-      } catch (err) {
-        // Diary sitemap fallback
-      }
+      } catch (err) {}
 
       const todayDate = new Date().toISOString().split("T")[0];
       const allEntries = [yatraXmlEntries, diaryXmlEntries].filter(Boolean).join("\n");
@@ -162,13 +263,18 @@ ${allEntries}
       });
     }
 
-    // 2. Clean BlogPost routes (/diary/<user>/<yatra>/<day>) -> serve index.html
+    // 2. Clean BlogPost routes (/diary/<user>/<yatra>/<day>) -> dynamic OG + index.html
     if (pathnameLower.startsWith("/diary/") && env && env.ASSETS) {
-      const indexReq = new Request(new URL("/index.html", request.url), request);
-      return env.ASSETS.fetch(indexReq);
+      const diaryMeta = await fetchDiaryMetaForPath(url.pathname);
+      return serveIndexWithDynamicOg(request, env, diaryMeta);
     }
 
-    // 3. Baaki sabhi files (index.html, js/*, style.css, etc.) normal serve karein
+    // 3. Root / Home -> serve index.html with configured OG image/tags
+    if ((url.pathname === "/" || pathnameLower === "/index.html") && env && env.ASSETS) {
+      return serveIndexWithDynamicOg(request, env, null);
+    }
+
+    // 4. Baaki sabhi files normal serve karein
     if (env && env.ASSETS) {
       return env.ASSETS.fetch(request);
     }
