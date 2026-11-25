@@ -182,7 +182,7 @@
             <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
                 <div style="text-align:left;">
                     <span style="background:rgba(255,255,255,0.22); padding:2px 9px; border-radius:12px; font-size:11px; font-weight:bold; letter-spacing:0.3px;">
-                        🚩 निःशुल्क डिजिटल तीर्थ मार्गदर्शिका
+                        🚩 निःशुल्क डिजिटल तीर्थ मार्गदर्शिका (100% Offline Support)
                     </span>
                     <h1 id="lblBrandTitle" style="color:#ffffff; margin:6px 0 2px 0; font-size:24px; text-shadow:0 1px 3px rgba(0,0,0,0.2);">
                         🕉️ परिक्रमापथ (Parikramapath)
@@ -202,10 +202,10 @@
 
             <!-- 4 TRUST & FEATURE HIGHLIGHTS -->
             <div class="feature-strip">
-                <div class="feature-chip">🧭 लाइव GPS<br>पगडंडी व मार्ग</div>
+                <div class="feature-chip">🧭 लाइव GPS<br>बिना इंटरनेट भी</div>
                 <div class="feature-chip">🛌 सत्यापित आश्रम<br>एवं धर्मशाला</div>
                 <div class="feature-chip">🍛 निःशुल्क सदाव्रत<br>अन्नक्षेत्र</div>
-                <div class="feature-chip">🚨 24x7 SOS<br>सेवादार सहायता</div>
+                <div class="feature-chip">📥 ऑटो ऑफ़लाइन<br>यात्रा बैकअप</div>
             </div>
         </header>
 
@@ -213,7 +213,7 @@
         <div id="pwaInstallBanner" style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:linear-gradient(135deg, #fff8e1, #ffe0b2); border:1px solid #ffb74d; border-radius:10px; padding:10px 12px; margin-bottom:14px;">
             <div style="text-align:left; font-size:12px; color:#333;">
                 <b style="color:#d84315; font-size:13px;">📲 मोबाइल होम स्क्रीन पर ऐप जोड़ें</b><br>
-                <span>बिना किसी शुल्क के सीधा ऐप की तरह उपयोग करें (ऑफलाइन आरती व मैप सपोर्ट)</span>
+                <span>यात्रा चुनते ही सभी पड़ाव और मैप अपने-आप फोन में ऑफ़लाइन सेव हो जाते हैं</span>
             </div>
             <button type="button" onclick="triggerPwaInstall()" style="background:#d84315; color:white; border:none; padding:8px 13px; border-radius:8px; font-size:12px; font-weight:bold; cursor:pointer; white-space:nowrap; box-shadow:0 2px 6px rgba(216,67,21,0.3);">
                 ➕ Add to Home
@@ -224,7 +224,7 @@
         <section aria-label="यात्रा चयन">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <h2 style="margin:0; font-size:16px; color:#222;">🗺️ अपनी पवित्र परिक्रमा / तीर्थ यात्रा चुनें</h2>
-                <span style="font-size:11px; color:#2e7d32; font-weight:bold; background:#e8f5e9; padding:3px 8px; border-radius:10px;">● Live GPS</span>
+                <span style="font-size:11px; color:#2e7d32; font-weight:bold; background:#e8f5e9; padding:3px 8px; border-radius:10px;">● Auto Offline Sync</span>
             </div>
 
             <input type="text" id="yatraSearchInput" onkeyup="filterYatraCards()" placeholder="🔍 यात्रा या राज्य का नाम लिखकर खोजें (जैसे: नर्मदा, गिरनार, ब्रज)..." class="search-input">
@@ -382,6 +382,10 @@
             🚩 <span id="activeStartBadge">Start Point</span>
         </button>
 
+        <button id="offlineStatusPill" onclick="ParikramaOffline.openOfflineJourneyDiary()" class="pill-btn" style="background:#1b5e20; color:white;" title="ऑफ़लाइन स्थिति व यात्रा डायरी देखें">
+            🟢 Offline Ready
+        </button>
+
         <select id="subRouteFilter" onchange="applyMapFilters()" class="pill-select">
             <option value="all">🗺️ सभी मार्ग</option>
         </select>
@@ -406,6 +410,8 @@
     <div id="dropdownMenu" class="dropdown-content">
         <button onclick="backToYatraGate(); toggleMenu();">🔄 यात्रा बदलें</button>
         <button onclick="openStartPointChanger(); toggleMenu();">🚩 प्रारंभ स्थल बदलें</button>
+        <button onclick="ParikramaOffline.openOfflineJourneyDiary(); toggleMenu();" style="background:#e8f5e9; color:#1b5e20; font-weight:bold;">📓 मेरी यात्रा डायरी / Offline डेटा</button>
+        <button id="batterySaverMenuBtn" onclick="ParikramaOffline.toggleBatterySaver(); toggleMenu();">🔋 बैटरी सेवर GPS: बंद</button>
         <button onclick="openYatraSeoPage(); toggleMenu();">📖 यात्रा के नियम एवं जानकारी</button>
         <button onclick="openAddPadavModal(); toggleMenu();">➕ नया पड़ाव / पॉइंट जोड़ें</button>
         <button onclick="openAartiModal(); toggleMenu();">🪔 आरती एवं स्तुति</button>
@@ -435,7 +441,7 @@
         </div>
         <div style="display:flex; gap:6px;">
             <button type="button" onclick="undoManualDrawPoint()" style="background:#ff9800; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">↩️ Undo</button>
-            <button type="button" onclick="saveManualDrawnRoute()" style="flex:1; background:#2e7d32; color:white; border:none; padding:7px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">💾 मार्ग सेव करें</button>
+            <button type="button" onclick="saveManualDrawnRoute()" style="flex:1; background:#2e7d32; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">💾 मार्ग सेव करें</button>
             <button type="button" onclick="cancelManualLineDrawing()" style="background:#dc3545; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">✖</button>
         </div>
     </div>
@@ -451,7 +457,7 @@
         </div>
         <div style="display:flex; gap:6px;">
             <button type="button" id="btnPauseResumeGps" onclick="pauseResumeGpsFollow()" style="background:#ff9800; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">⏸️ रोकें</button>
-            <button type="button" onclick="saveGpsFollowedRoute()" style="flex:1; background:#0288d1; color:white; border:none; padding:7px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">💾 GPS मार्ग सेव करें</button>
+            <button type="button" onclick="saveGpsFollowedRoute()" style="flex:1; background:#0288d1; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">💾 GPS मार्ग सेव करें</button>
             <button type="button" onclick="cancelGpsFollowRecording()" style="background:#dc3545; color:white; border:none; padding:7px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">✖</button>
         </div>
     </div>
@@ -461,6 +467,13 @@
 
 <!-- MODALS BACKDROP -->
 <div id="modalBackdrop" class="modal-backdrop" style="display:none;" onclick="closeAllModals()"></div>
+
+<!-- OFFLINE JOURNEY DIARY & CACHED YATRAS MODAL -->
+<div id="offlineDiaryModal" class="center-modal" style="display:none; max-width:440px;">
+    <h3 style="margin-top:0; color:#1b5e20;">📓 मेरी यात्रा डायरी व Offline बैकअप</h3>
+    <div id="offlineDiaryBody" style="max-height:62vh; overflow-y:auto; font-size:13px; color:#222;"></div>
+    <button type="button" onclick="closeAllModals()" class="primary-btn" style="background:#2e7d32; margin-top:12px;">बंद करें (Close)</button>
+</div>
 
 <!-- PWA MANUAL INSTALL GUIDE MODAL (iOS / BROWSER FALLBACK) -->
 <div id="pwaGuideModal" class="center-modal" style="display:none; max-width:420px;">
@@ -768,13 +781,14 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=13"></script>
-<script src="js/yatra-flow.js?v=13"></script>
+<script src="js/config.js?v=14"></script>
+<script src="js/offline-manager.js?v=14"></script>
+<script src="js/yatra-flow.js?v=14"></script>
 <script src="js/visited-local.js?v=1"></script>
-<script src="js/map.js?v=13"></script>
-<script src="js/auth-sos.js?v=13"></script>
-<script src="js/live-yatris.js?v=13"></script>
-<script src="js/admin.js?v=13"></script>
+<script src="js/map.js?v=14"></script>
+<script src="js/auth-sos.js?v=14"></script>
+<script src="js/live-yatris.js?v=14"></script>
+<script src="js/admin.js?v=14"></script>
 
 <!-- PWA INSTALL & SERVICE WORKER CONTROLLER -->
 <script>
@@ -796,7 +810,6 @@ window.addEventListener('appinstalled', () => {
 });
 
 async function triggerPwaInstall() {
-    // 1. Agar Chrome/Edge ka native install prompt ready hai to seedha dikhayein
     if (deferredPwaPrompt) {
         try {
             deferredPwaPrompt.prompt();
@@ -810,7 +823,6 @@ async function triggerPwaInstall() {
         }
     }
 
-    // 2. Fallback: Manual Install Guide Modal ko zabardasti upar (z-index: 9999) dikhayein
     const guideModal = document.getElementById('pwaGuideModal');
     const backdrop = document.getElementById('modalBackdrop');
 
@@ -830,6 +842,10 @@ async function triggerPwaInstall() {
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').catch(() => {});
+        if (window.ParikramaOffline) {
+            window.ParikramaOffline.updateOfflineStatusBadge(navigator.onLine ? 'online' : 'offline');
+            window.ParikramaOffline.syncOfflineOutbox();
+        }
     });
 }
 </script>

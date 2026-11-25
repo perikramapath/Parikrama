@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - LIVE GPS ROUTE HUD, AUTO-ADVANCE & BRANCH PRUNING
+// PARIKRAMAPATH - OFFLINE AUTO-SYNC, LIVE GPS HUD & NEXT-PADAV SEARCH
 // =========================================================
 
 window.map = null;
@@ -25,6 +25,7 @@ window.isPickingEditLocation = false;
 window.hasCenteredOnLiveGps = false;
 window.lastDbLocationPingMs = 0;
 window.lastLiveNavCalcMs = 0;
+window.lastBatterySaverGpsPt = null;
 window.adminYatriRealtimeSub = null;
 window.adminVisitorRealtimeSub = null;
 
@@ -84,6 +85,71 @@ window.setManualStartPadav = function(padavId) {
     renderIsolatedPadavs(window.activeYatraPadavs);
     alert(`🚩 "${found.name}" को आपका प्रारंभिक पड़ाव सेट कर दिया गया है।`);
 };
+
+// ---------------------------------------------------------
+// NEXT PADAV SEARCH FILTER INSIDE ADD/EDIT PADAV MODAL
+// ---------------------------------------------------------
+function injectNextPadavPickerSearch() {
+    const picker = document.getElementById('nextPadavPicker');
+    if (!picker) return;
+
+    let searchBox = document.getElementById('nextPadavPickerSearchInput');
+    if (!searchBox) {
+        searchBox = document.createElement('input');
+        searchBox.type = 'text';
+        searchBox.id = 'nextPadavPickerSearchInput';
+        searchBox.placeholder = '🔍 अगला पड़ाव नाम लिखकर खोजें...';
+        searchBox.className = 'form-input';
+        searchBox.style.cssText = 'margin-bottom:6px; font-size:12.5px; background:#ffffff; border:1px solid #8bc34a;';
+        picker.parentNode.insertBefore(searchBox, picker);
+
+        searchBox.addEventListener('input', function() {
+            const q = this.value.toLowerCase().trim();
+            const currentVal = picker.value;
+            const opts = Array.from(picker.options);
+
+            opts.forEach((opt, idx) => {
+                if (idx === 0) {
+                    opt.hidden = false;
+                    return;
+                }
+                const match = !q || (opt.text || '').toLowerCase().includes(q);
+                opt.hidden = !match;
+                opt.style.display = match ? '' : 'none';
+            });
+
+            if (q) {
+                const firstVisible = opts.find((o, i) => i > 0 && !o.hidden);
+                if (firstVisible && (!currentVal || picker.options[picker.selectedIndex]?.hidden)) {
+                    picker.value = firstVisible.value;
+                }
+            }
+        });
+    } else {
+        searchBox.value = '';
+        Array.from(picker.options).forEach(opt => {
+            opt.hidden = false;
+            opt.style.display = '';
+        });
+    }
+}
+
+// Observe addPadavModal opening so nextPadavPicker always gets search input
+(function attachNextPadavSearchObserver() {
+    if (typeof MutationObserver === 'undefined') return;
+    document.addEventListener('DOMContentLoaded', () => {
+        injectNextPadavPickerSearch();
+        const modalEl = document.getElementById('addPadavModal');
+        if (modalEl) {
+            const obs = new MutationObserver(() => {
+                if (modalEl.style.display !== 'none') {
+                    injectNextPadavPickerSearch();
+                }
+            });
+            obs.observe(modalEl, { attributes: true, attributeFilter: ['style'] });
+        }
+    });
+})();
 
 // ---------------------------------------------------------
 // FUNCTION GROUP 1: MANUAL POINT-TO-POINT LINE DRAWING
@@ -178,7 +244,6 @@ window.searchQuickAddPadavLocation = async function() {
         statusEl.innerText = '⏳ स्थान खोजा जा रहा है...';
     }
 
-    // 1. Pehle active yatra ke existing padavs me check karein
     const localMatch = (window.activeYatraPadavs || []).find(p =>
         p.name && p.name.toLowerCase().includes(query.toLowerCase()) && p.lat && p.lng
     );
@@ -196,7 +261,6 @@ window.searchQuickAddPadavLocation = async function() {
         return;
     }
 
-    // 2. OpenStreetMap Nominatim se global/India location search karein
     try {
         const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=${encodeURIComponent(query)}`;
         const res = await fetch(url, { headers: { 'Accept-Language': 'hi,en' } });
@@ -380,6 +444,9 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
 
     const cacheKey = `${fromPadav.id}_${toPadav.id}_${routeIdx}`;
     if (window.osrmDistanceCache[cacheKey]) return window.osrmDistanceCache[cacheKey];
+
+    // Offline mode me OSRM call skip karein
+    if (!navigator.onLine) return null;
 
     try {
         const url = `https://router.project-osrm.org/route/v1/driving/${fromPadav.lng},${fromPadav.lat};${toPadav.lng},${toPadav.lat}?overview=full&geometries=geojson&alternatives=true`;
@@ -629,7 +696,7 @@ function updateLiveNavigationHud(originPadav, targetEntries) {
     const rowsHtml = targetEntries.map((item, idx) => {
         const kmStr = item.liveKm !== null && item.liveKm !== undefined
             ? `<b>${item.liveKm} km</b>`
-            : '<span>दूरी लोड...</span>';
+            : '<span>मार्ग पर</span>';
         const prefix = targetEntries.length > 1 ? `विकल्प ${idx + 1}: ` : '➡️ अगला पड़ाव: ';
         return `
             <div style="display:flex; justify-content:space-between; align-items:center; ${idx > 0 ? 'margin-top:4px; padding-top:4px; border-top:1px dashed rgba(255,255,255,0.35);' : ''}">
@@ -731,7 +798,7 @@ function injectLocateMeButtonOnMap() {
 // SYNC BOTH REGISTERED & UNREGISTERED (GUEST) GPS TO SUPABASE
 // =========================================================
 async function syncYatriLiveLocationToDb(lat, lng, force = false) {
-    if (!window.activeYatra) return;
+    if (!window.activeYatra || !navigator.onLine) return;
     const now = Date.now();
     if (!force && (now - window.lastDbLocationPingMs) < 15000) return;
     window.lastDbLocationPingMs = now;
@@ -827,7 +894,7 @@ function renderSingleAdminLiveYatri(yatri, isGuest = false) {
 }
 
 async function loadAllActiveYatrisForAdmin() {
-    if (!isStrictSuperOrAdmin() || !window.map) return;
+    if (!isStrictSuperOrAdmin() || !window.map || !navigator.onLine) return;
 
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
@@ -931,11 +998,7 @@ function openPadavDetailsModal(padavId) {
 }
 
 // =========================================================
-// YATRI LIVE PROGRESS TRACKER:
-// 1) A -> B LINE FROM STARTING POINT
-// 2) CROSSING 500M HIDES A & AUTO-SWITCHES TO B -> C
-// 3) BRANCHING: SHOWS ALL NEXT PADAVS, HIDES OTHER BRANCH ON COMMIT
-// 4) CONTINUOUS LIVE DISTANCE UPDATE WHILE WALKING
+// YATRI LIVE PROGRESS TRACKER (WORKS 100% OFFLINE VIA SATELLITE GPS)
 // =========================================================
 function startYatriLiveProgressTracker() {
     if (!navigator.geolocation) return;
@@ -949,6 +1012,13 @@ function startYatriLiveProgressTracker() {
 
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
+
+        // Battery Saver Mode: har 20m chalne par update karein
+        if (window.ParikramaOffline && window.ParikramaOffline.isBatterySaverEnabled() && window.lastBatterySaverGpsPt) {
+            const movedSinceLast = getDistanceInMeters(window.lastBatterySaverGpsPt[0], window.lastBatterySaverGpsPt[1], uLat, uLng);
+            if (movedSinceLast < 20) return;
+        }
+        window.lastBatterySaverGpsPt = [uLat, uLng];
 
         updateMyBlueLocationDot(uLat, uLng, false);
         syncYatriLiveLocationToDb(uLat, uLng, false);
@@ -1057,7 +1127,7 @@ async function initAndLoadIsolatedMap() {
         window.map = L.map('map', { zoomControl: false }).setView([initialLat, initialLng], initialZoom);
         L.control.zoom({ position: 'bottomright' }).addTo(window.map);
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap | Parikramapath'
         }).addTo(window.map);
 
@@ -1067,6 +1137,7 @@ async function initAndLoadIsolatedMap() {
         window.adminLiveYatrisLayer.addTo(window.map);
 
         injectLocateMeButtonOnMap();
+        injectNextPadavPickerSearch();
 
         // MAP CLICK HANDLER
         window.map.on('click', async function(e) {
@@ -1086,6 +1157,7 @@ async function initAndLoadIsolatedMap() {
                 document.getElementById('newPadavLat').value = clickLat.toFixed(6);
                 document.getElementById('newPadavLng').value = clickLng.toFixed(6);
                 showModal('addPadavModal');
+                injectNextPadavPickerSearch();
                 if (typeof recalculateAllAddedNextPadavs === 'function') {
                     recalculateAllAddedNextPadavs();
                 }
@@ -1115,13 +1187,42 @@ async function initAndLoadIsolatedMap() {
 
     setTimeout(() => { if (window.map) window.map.invalidateSize(); }, 200);
 
-    // 1. PEHLE CUSTOM DRAWN ROUTES LOAD KAREIN
-    const { data: routes } = await supabaseClient
-        .from('yatra_routes')
-        .select('*')
-        .eq('yatra_id', window.activeYatra.id);
+    // 1. CUSTOM DRAWN ROUTES + PADAVS LOAD (ONLINE + AUTOMATIC OFFLINE FALLBACK)
+    let loadedRoutes = [];
+    let loadedPadavs = window.yatraPadavsForSelection || [];
 
-    window.activeCustomRoutes = routes || [];
+    if (navigator.onLine) {
+        try {
+            const { data: routes, error } = await supabaseClient
+                .from('yatra_routes')
+                .select('*')
+                .eq('yatra_id', window.activeYatra.id);
+            if (!error && Array.isArray(routes)) {
+                loadedRoutes = routes;
+            }
+        } catch (e) {}
+    }
+
+    // Agar offline hai ya online se data empty aaya to IndexedDB offline pack se restore karein
+    if ((!navigator.onLine || loadedPadavs.length === 0) && window.ParikramaOffline) {
+        const offlinePack = await window.ParikramaOffline.getYatraOfflinePack(window.activeYatra.id || window.activeYatra.slug);
+        if (offlinePack) {
+            if (loadedPadavs.length === 0 && Array.isArray(offlinePack.padavs)) {
+                loadedPadavs = offlinePack.padavs;
+                window.yatraPadavsForSelection = loadedPadavs;
+            }
+            if (loadedRoutes.length === 0 && Array.isArray(offlinePack.routes)) {
+                loadedRoutes = offlinePack.routes;
+            }
+        }
+    }
+
+    // Online hone par poori yatra (padavs + custom routes + map tiles) ko automatic offline save karein
+    if (navigator.onLine && window.ParikramaOffline && loadedPadavs.length > 0) {
+        window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, loadedPadavs, loadedRoutes);
+    }
+
+    window.activeCustomRoutes = loadedRoutes;
     window.activeCustomRoutes.forEach(r => {
         if (Array.isArray(r.coordinates) && r.coordinates.length > 1) {
             L.polyline(r.coordinates, {
@@ -1133,7 +1234,7 @@ async function initAndLoadIsolatedMap() {
     });
 
     // 2. AB PADAVS RENDER KAREIN
-    window.activeYatraPadavs = window.yatraPadavsForSelection || [];
+    window.activeYatraPadavs = loadedPadavs;
     if (window.selectedStartPadav && window.activeYatraPadavs.length > 0) {
         const freshMatch = window.activeYatraPadavs.find(item => String(item.id) === String(window.selectedStartPadav.id));
         if (freshMatch) window.selectedStartPadav = freshMatch;
@@ -1204,7 +1305,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
     const branchColors = ['#1565c0', '#2e7d32', '#6a1b9a'];
     const hudEntries = [];
     const now = Date.now();
-    const shouldQueryLiveOsrm = (now - window.lastLiveNavCalcMs) > 10000;
+    const shouldQueryLiveOsrm = navigator.onLine && ((now - window.lastLiveNavCalcMs) > 10000);
     if (shouldQueryLiveOsrm) window.lastLiveNavCalcMs = now;
 
     const validTargets = nextPadavsArr
@@ -1250,7 +1351,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
         );
 
         const buildTooltip = (kmValue) => {
-            const kmText = kmValue ? ` • <b>${kmValue} km शेष (सड़क मार्ग)</b>` : '';
+            const kmText = kmValue ? ` • <b>${kmValue} km शेष</b>` : '';
             const branchTag = validTargets.length > 1 ? `<b>[विकल्प ${idx + 1}]</b> ` : '';
             return `${branchTag}<b>➡️ ${currentOriginPadav.name} ➔ ${targetP.name}</b><br><small>${np.path || currentOriginPadav.sub_route || 'परिक्रमा मार्ग'}${kmText}</small>`;
         };
@@ -1262,7 +1363,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
             dashArray: '8, 8'
         };
 
-        if (hasLiveGps) {
+        if (hasLiveGps && navigator.onLine) {
             const liveCacheKey = `live_${targetP.id}`;
             if (window.osrmGeometryCache[liveCacheKey] && !shouldQueryLiveOsrm) {
                 if (!hasCustomLine) {
@@ -1305,19 +1406,27 @@ async function drawAutoPadavConnectingLines(visibleList) {
             } catch (e) {}
         }
 
+        // Offline ya cached road line fallback (bina internet ke bhi disha-suchak line dikhegi)
         if (!hasCustomLine) {
             const pairCacheKey = `${currentOriginPadav.id}_${targetP.id}_${idx}`;
             if (window.osrmGeometryCache[pairCacheKey]) {
                 L.polyline(window.osrmGeometryCache[pairCacheKey], dottedStyle)
                     .bindPopup(buildTooltip(window.osrmDistanceCache[pairCacheKey] || liveRemainingKm))
                     .addTo(window.autoPadavLinkLayer);
-            } else {
+            } else if (navigator.onLine) {
                 const roadKm = await fetchRealRoadKmAsync(currentOriginPadav, targetP, idx);
                 if (window.osrmGeometryCache[pairCacheKey]) {
                     L.polyline(window.osrmGeometryCache[pairCacheKey], dottedStyle)
                         .bindPopup(buildTooltip(roadKm || liveRemainingKm))
                         .addTo(window.autoPadavLinkLayer);
                 }
+            } else {
+                const startPt = hasLiveGps
+                    ? [window.yatriLiveCoords.lat, window.yatriLiveCoords.lng]
+                    : [currentOriginPadav.lat, currentOriginPadav.lng];
+                L.polyline([startPt, [targetP.lat, targetP.lng]], dottedStyle)
+                    .bindPopup(buildTooltip(liveRemainingKm))
+                    .addTo(window.autoPadavLinkLayer);
             }
         }
     }
@@ -1445,7 +1554,7 @@ function renderIsolatedPadavs(list) {
 
                         const resolvedKm = targetP ? getResolvedPathKmSync(p, targetP, np.km, idx) : (np.km || null);
                         const kmSpanId = targetP ? `km_badge_${p.id}_${targetP.id}_${idx}` : '';
-                        const kmLabel = resolvedKm ? `${resolvedKm} km` : 'सड़क दूरी लोड...';
+                        const kmLabel = resolvedKm ? `${resolvedKm} km` : 'मार्ग पर';
 
                         const routeTag = finalNextList.length > 1 ? `<span style="font-size:10px; background:#e8f5e9; color:#1b5e20; padding:1px 4px; border-radius:3px; margin-right:3px;">मार्ग ${idx + 1}</span>` : '• ';
 
@@ -1587,7 +1696,7 @@ async function handleManualMapClickPoint(lat, lng) {
     const useRoadSnap = snapChk ? snapChk.checked : true;
     const statusEl = document.getElementById('manualDrawStatus');
 
-    if (window.manualDrawnPoints.length === 0 || !useRoadSnap) {
+    if (window.manualDrawnPoints.length === 0 || !useRoadSnap || !navigator.onLine) {
         window.manualDrawnPoints.push([lat, lng]);
         window.manualHistoryStack.push(1);
         updateManualTempLine();
@@ -1670,6 +1779,10 @@ async function saveManualDrawnRoute() {
     if (error) return alert("Route save error: " + error.message);
 
     window.activeCustomRoutes.push(data || newRouteObj);
+
+    if (window.ParikramaOffline) {
+        window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
+    }
 
     L.polyline(newRouteObj.coordinates, {
         color: newRouteObj.color,
@@ -1826,6 +1939,10 @@ async function saveGpsFollowedRoute() {
     if (error) return alert("Save Error: " + error.message);
 
     window.activeCustomRoutes.push(data || newRouteObj);
+
+    if (window.ParikramaOffline) {
+        window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
+    }
 
     L.polyline(newRouteObj.coordinates, {
         color: '#0288d1',
