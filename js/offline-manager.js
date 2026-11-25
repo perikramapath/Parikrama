@@ -200,21 +200,36 @@ window.ParikramaOffline = (function() {
     // =========================================================
     // 2. DAY-WISE AUTOMATIC + EDITABLE JOURNEY DIARY (DATE + TIME)
     // =========================================================
-    async function getDiariesForYatra(yatraId) {
+    async function getAllSavedDiaries() {
         try {
             const db = await openDB();
             return new Promise((resolve) => {
                 const tx = db.transaction(STORE_DIARIES, 'readonly');
                 const req = tx.objectStore(STORE_DIARIES).getAll();
                 req.onsuccess = () => {
-                    const all = req.result || [];
-                    const filtered = all
-                        .filter(d => String(d.yatra_id) === String(yatraId))
-                        .sort((a, b) => (a.day_number || 1) - (b.day_number || 1));
-                    resolve(filtered);
+                    const all = Array.isArray(req.result) ? req.result : [];
+                    all.sort((a, b) => {
+                        const dA = (a.diary_date || '').localeCompare(b.diary_date || '');
+                        if (dA !== 0) return dA;
+                        return (parseInt(a.day_number, 10) || 1) - (parseInt(b.day_number, 10) || 1);
+                    });
+                    resolve(all);
                 };
                 req.onerror = () => resolve([]);
             });
+        } catch (e) {
+            return [];
+        }
+    }
+
+    async function getDiariesForYatra(yatraId) {
+        try {
+            const all = await getAllSavedDiaries();
+            if (!yatraId) return all;
+            const filtered = all
+                .filter(d => String(d.yatra_id) === String(yatraId))
+                .sort((a, b) => (parseInt(a.day_number, 10) || 1) - (parseInt(b.day_number, 10) || 1));
+            return filtered.length > 0 ? filtered : all;
         } catch (e) {
             return [];
         }
@@ -230,15 +245,82 @@ window.ParikramaOffline = (function() {
         });
     }
 
+    async function syncRemoteDiariesToLocal(yatraObj = null) {
+        if (!navigator.onLine || typeof supabaseClient === 'undefined') return;
+        try {
+            let query = supabaseClient
+                .from('yatra_diaries')
+                .select('*')
+                .order('day_number', { ascending: true })
+                .limit(50);
+
+            if (window.currentUser && window.currentUser.id) {
+                query = query.eq('user_id', window.currentUser.id);
+            } else {
+                const savedName = (localStorage.getItem('pp_diary_yatri_name') || '').trim();
+                if (savedName) {
+                    query = query.eq('yatri_name', savedName);
+                } else if (yatraObj && yatraObj.id) {
+                    query = query.eq('yatra_id', String(yatraObj.id));
+                }
+            }
+
+            const { data, error } = await query;
+            if (error || !Array.isArray(data) || data.length === 0) return;
+
+            const existingAll = await getAllSavedDiaries();
+            for (const row of data) {
+                const yId = String(row.yatra_id || (yatraObj && yatraObj.id) || 'general');
+                const dDate = row.diary_date || getTodayDateStr();
+                const dayNum = parseInt(row.day_number, 10) || 1;
+                const dKey = `${yId}_${dDate}_day${dayNum}`;
+
+                const localMatch = existingAll.find(x =>
+                    x.diary_key === dKey ||
+                    (String(x.yatra_id) === yId && (parseInt(x.day_number, 10) || 1) === dayNum && x.diary_date === dDate)
+                );
+
+                let photos = row.photo_urls;
+                if (typeof photos === 'string') {
+                    try { photos = JSON.parse(photos); } catch (e) { photos = []; }
+                }
+                photos = Array.isArray(photos) ? photos.slice(0, 2) : [];
+
+                const timeParts = (row.diary_time || '').split(' - ');
+                const merged = {
+                    ...(localMatch || {}),
+                    diary_key: localMatch ? localMatch.diary_key : dKey,
+                    yatra_id: yId,
+                    yatra_name: row.yatra_name || (yatraObj && (yatraObj.name_hi || yatraObj.name)) || 'यात्रा',
+                    day_number: dayNum,
+                    diary_date: dDate,
+                    start_time: (localMatch && localMatch.start_time) || (timeParts[0] || '').trim() || getNowTimeStr(),
+                    halt_time: (localMatch && localMatch.halt_time) || (timeParts[1] || '').trim() || '',
+                    start_place: row.start_place || (localMatch && localMatch.start_place) || '',
+                    night_halt: row.night_halt || (localMatch && localMatch.night_halt) || '',
+                    distance_km: parseFloat(row.distance_km ?? (localMatch && localMatch.distance_km) ?? 0) || 0,
+                    experience_text: row.experience_text || (localMatch && localMatch.experience_text) || '',
+                    photo_urls: photos.length > 0 ? photos : ((localMatch && localMatch.photo_urls) || []),
+                    is_manually_edited: true,
+                    publish_status: row.status === 'approved' ? 'approved' : 'submitted',
+                    updated_at: row.created_at || new Date().toISOString()
+                };
+
+                await saveDiaryEntryRecord(merged);
+            }
+        } catch (e) {}
+    }
+
     async function ensureTodayDiaryEntry(yatraObj, fallbackStartName = '') {
         if (!yatraObj || !yatraObj.id) return null;
         const today = getTodayDateStr();
-        const key = `${yatraObj.id}_${today}`;
         const existingList = await getDiariesForYatra(yatraObj.id);
-        let todayRec = existingList.find(d => d.diary_key === key);
+        const yatraOnly = existingList.filter(d => String(d.yatra_id) === String(yatraObj.id));
+        const key = `${yatraObj.id}_${today}_day${yatraOnly.length + 1}`;
+        let todayRec = yatraOnly.find(d => d.diary_date === today);
 
         if (!todayRec) {
-            const prevDay = existingList.length > 0 ? existingList[existingList.length - 1] : null;
+            const prevDay = yatraOnly.length > 0 ? yatraOnly[yatraOnly.length - 1] : null;
             const autoStart = fallbackStartName ||
                 (prevDay && prevDay.night_halt ? prevDay.night_halt : '') ||
                 (window.selectedStartPadav ? window.selectedStartPadav.name : '');
@@ -247,7 +329,7 @@ window.ParikramaOffline = (function() {
                 diary_key: key,
                 yatra_id: String(yatraObj.id),
                 yatra_name: yatraObj.name_hi || yatraObj.name,
-                day_number: existingList.length + 1,
+                day_number: yatraOnly.length + 1,
                 diary_date: today,
                 start_time: getNowTimeStr(),
                 halt_time: '',
@@ -406,7 +488,6 @@ window.ParikramaOffline = (function() {
 
         const finalPhotos = uploadedUrls.slice(0, 2);
 
-        // Pehle check karein ki isi yatri + yatra + day_number ka existing post pehle se hai ya nahi
         const { data: existingRows } = await supabaseClient
             .from('yatra_diaries')
             .select('id, photo_urls')
@@ -439,7 +520,6 @@ window.ParikramaOffline = (function() {
                 .eq('id', primaryId);
             if (updErr) throw updErr;
 
-            // Agar pehle se koi extra duplicate row thi to use hata dein
             const extraIds = existingRows.slice(1).map(r => r.id);
             if (extraIds.length > 0) {
                 await supabaseClient.from('yatra_diaries').delete().in('id', extraIds);
@@ -483,11 +563,12 @@ window.ParikramaOffline = (function() {
         if (!bodyEl) return;
 
         const yatra = window.activeYatra;
+        await syncRemoteDiariesToLocal(yatra);
         if (yatra) {
             await ensureTodayDiaryEntry(yatra);
         }
 
-        const diaries = yatra ? await getDiariesForYatra(yatra.id) : [];
+        const diaries = yatra ? await getDiariesForYatra(yatra.id) : await getAllSavedDiaries();
         const savedPacks = await getAllSavedYatraPacks();
 
         const totalKmWalked = diaries.reduce((sum, d) => sum + (parseFloat(d.distance_km) || 0), 0).toFixed(1);
@@ -501,7 +582,7 @@ window.ParikramaOffline = (function() {
             </div>
         `;
 
-        if (yatra && firstDay) {
+        if (firstDay) {
             html += `
                 <div style="background:#f1f8e9; padding:9px 11px; border-radius:8px; border:1px solid #c5e1a5; margin-bottom:12px; font-size:12px; line-height:1.6;">
                     <div><b>🚩 आरंभ (Start):</b> ${firstDay.start_place || '-'} <small style="color:#555;">(${firstDay.diary_date} • ${firstDay.start_time || ''})</small></div>
@@ -520,8 +601,8 @@ window.ParikramaOffline = (function() {
                     ? `<div style="display:flex; gap:6px; margin-top:6px;">${photos.map(u => `<img src="${u}" style="width:58px; height:58px; object-fit:cover; border-radius:6px; border:1px solid #ccc;">`).join('')}</div>`
                     : '';
 
-                const statusBadge = d.publish_status === 'submitted'
-                    ? `<span style="background:#e3f2fd; color:#1565c0; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">🌐 Admin Approval के लिए भेजा गया</span>`
+                const statusBadge = (d.publish_status === 'submitted' || d.publish_status === 'approved')
+                    ? `<span style="background:#e3f2fd; color:#1565c0; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">🌐 सुरक्षित / प्रकाशित</span>`
                     : (d.publish_status === 'queued'
                         ? `<span style="background:#fff3e0; color:#e65100; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">⏳ नेटवर्क आने पर अपलोड होगा</span>`
                         : '');
@@ -529,7 +610,7 @@ window.ParikramaOffline = (function() {
                 html += `
                     <div style="background:#ffffff; border:1px solid #ffe0b2; border-left:4px solid #ff9800; border-radius:8px; padding:10px; margin-bottom:9px; font-size:12.5px;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                            <b style="color:#d84315; font-size:13.5px;">Day ${d.day_number} • 📅 ${d.diary_date}</b>
+                            <b style="color:#d84315; font-size:13.5px;">${d.yatra_name ? d.yatra_name + ' • ' : ''}Day ${d.day_number} • 📅 ${d.diary_date}</b>
                             <button type="button" onclick="ParikramaOffline.openDiaryDayEditor('${d.diary_key}')" style="background:#ffc107; color:#000; border:none; padding:4px 9px; border-radius:5px; font-size:11.5px; font-weight:bold; cursor:pointer;">
                                 ✏️ Edit / अनुभव लिखें
                             </button>
@@ -545,6 +626,8 @@ window.ParikramaOffline = (function() {
                     </div>
                 `;
             });
+        } else {
+            html += `<p style="color:#666; font-size:12.5px; text-align:center; padding:12px 0;">अभी कोई यात्रा डायरी एंट्री नहीं मिली है।</p>`;
         }
 
         html += `<div id="diaryDayEditorContainer" style="display:none; background:#f9fbe7; border:2px solid #8bc34a; border-radius:10px; padding:11px; margin-top:10px;"></div>`;
@@ -555,8 +638,7 @@ window.ParikramaOffline = (function() {
 
     async function openDiaryDayEditor(diaryKey) {
         const yatra = window.activeYatra;
-        if (!yatra) return;
-        const diaries = await getDiariesForYatra(yatra.id);
+        const diaries = yatra ? await getDiariesForYatra(yatra.id) : await getAllSavedDiaries();
         const rec = diaries.find(d => d.diary_key === diaryKey);
         if (!rec) return;
 
@@ -639,10 +721,12 @@ window.ParikramaOffline = (function() {
 
     async function saveDiaryDayEdit(diaryKey) {
         const yatra = window.activeYatra;
-        if (!yatra) return;
-        const diaries = await getDiariesForYatra(yatra.id);
+        const diaries = yatra ? await getDiariesForYatra(yatra.id) : await getAllSavedDiaries();
         const rec = diaries.find(d => d.diary_key === diaryKey);
         if (!rec) return;
+
+        const effectiveYatraId = String(rec.yatra_id || (yatra && yatra.id) || 'general');
+        const effectiveYatraName = rec.yatra_name || (yatra && (yatra.name_hi || yatra.name)) || 'यात्रा';
 
         const saveBtn = document.getElementById('btnSaveDiaryDayEdit');
         if (saveBtn) {
@@ -697,8 +781,8 @@ window.ParikramaOffline = (function() {
             const publicPayload = {
                 user_id: window.currentUser ? window.currentUser.id : null,
                 yatri_name: yatriName,
-                yatra_id: String(yatra.id),
-                yatra_name: yatra.name_hi || yatra.name,
+                yatra_id: effectiveYatraId,
+                yatra_name: effectiveYatraName,
                 day_number: rec.day_number,
                 diary_date: rec.diary_date,
                 diary_time: `${rec.start_time || ''} - ${rec.halt_time || ''}`.trim(),
@@ -774,6 +858,7 @@ window.ParikramaOffline = (function() {
         saveYatraOfflinePack,
         getYatraOfflinePack,
         getAllSavedYatraPacks,
+        getAllSavedDiaries,
         ensureTodayDiaryEntry,
         recordLiveGpsForDiary,
         recordPadavStopInDiary,
