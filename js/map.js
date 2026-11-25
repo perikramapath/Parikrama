@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & NEXT-PADAV SEARCH
+// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & DAY-WISE DIARY SYNC
 // =========================================================
 
 window.map = null;
@@ -127,6 +127,10 @@ window.setManualStartPadav = function(padavId) {
     window.abandonedBranchIds.delete(found.id);
     window.isExplicitlyChangingStartPoint = false;
     saveUserStartPadavLocal(window.activeYatra, found);
+
+    if (window.ParikramaOffline && typeof window.ParikramaOffline.ensureTodayDiaryEntry === 'function') {
+        window.ParikramaOffline.ensureTodayDiaryEntry(window.activeYatra, found.name);
+    }
 
     const badgeEl = document.getElementById('activeStartBadge');
     if (badgeEl) badgeEl.innerText = found.name;
@@ -1045,7 +1049,7 @@ function openPadavDetailsModal(padavId) {
 }
 
 // =========================================================
-// YATRI LIVE PROGRESS TRACKER (WORKS 100% OFFLINE VIA SATELLITE GPS)
+// YATRI LIVE PROGRESS TRACKER (WORKS 100% OFFLINE + SYNCS DAY-WISE DIARY)
 // =========================================================
 function startYatriLiveProgressTracker() {
     if (!navigator.geolocation) return;
@@ -1068,6 +1072,11 @@ function startYatriLiveProgressTracker() {
 
         updateMyBlueLocationDot(uLat, uLng, false);
         syncYatriLiveLocationToDb(uLat, uLng, false);
+
+        // Day-wise automatic distance & evening night-halt diary sync
+        if (window.ParikramaOffline && typeof window.ParikramaOffline.recordLiveGpsForDiary === 'function') {
+            window.ParikramaOffline.recordLiveGpsForDiary(uLat, uLng);
+        }
 
         if (window.map && !window.hasCenteredOnLiveGps && !window.isManualDrawing && !window.isGpsFollowActive) {
             window.hasCenteredOnLiveGps = true;
@@ -1096,6 +1105,9 @@ function startYatriLiveProgressTracker() {
 
                         if (movedTowardAnyNext) {
                             window.passedPadavIds.add(p.id);
+                            if (window.ParikramaOffline && typeof window.ParikramaOffline.recordPadavStopInDiary === 'function') {
+                                window.ParikramaOffline.recordPadavStopInDiary(p, false);
+                            }
                             if (String(window.focusedOriginPadavId) === String(p.id)) {
                                 window.focusedOriginPadavId = null;
                             }
@@ -1124,6 +1136,9 @@ function startYatriLiveProgressTracker() {
                         }
                     } else if (window.selectedStartPadav && String(window.selectedStartPadav.id) === String(p.id)) {
                         window.passedPadavIds.add(p.id);
+                        if (window.ParikramaOffline && typeof window.ParikramaOffline.recordPadavStopInDiary === 'function') {
+                            window.ParikramaOffline.recordPadavStopInDiary(p, false);
+                        }
                         statusChanged = true;
                     }
                 }
@@ -1160,6 +1175,10 @@ async function initAndLoadIsolatedMap() {
         if (savedStart) {
             window.selectedStartPadav = savedStart;
         }
+    }
+
+    if (window.ParikramaOffline && typeof window.ParikramaOffline.ensureTodayDiaryEntry === 'function') {
+        window.ParikramaOffline.ensureTodayDiaryEntry(window.activeYatra, window.selectedStartPadav?.name || '');
     }
 
     const badgeEl = document.getElementById('activeStartBadge');
