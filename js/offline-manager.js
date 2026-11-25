@@ -266,7 +266,6 @@ window.ParikramaOffline = (function() {
         return todayRec;
     }
 
-    // Automatic GPS distance & evening Night-Halt tracker (respects manual user edits)
     async function recordLiveGpsForDiary(lat, lng) {
         const yatra = window.activeYatra;
         if (!yatra || !yatra.id) return;
@@ -288,7 +287,6 @@ window.ParikramaOffline = (function() {
         lastAutoGpsPt = [lat, lng];
         lastAutoGpsDate = today;
 
-        // Shaam 6:30 PM ke baad agar kisi padav ke 450m ke andar hain to auto Night Halt set karein
         const hourNow = new Date().getHours();
         const minNow = new Date().getMinutes();
         const isEvening = (hourNow > 18) || (hourNow === 18 && minNow >= 30);
@@ -317,7 +315,6 @@ window.ParikramaOffline = (function() {
         }
     }
 
-    // Jab yatri kisi padav ko Visited / Night Halt mark kare
     async function recordPadavStopInDiary(padavObj, markAsNightHalt = false) {
         const yatra = window.activeYatra;
         if (!yatra || !padavObj) return;
@@ -346,7 +343,7 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 3. OFFLINE ACTION OUTBOX (PADAVS + DIARY PUBLIC SYNC)
+    // 3. OFFLINE ACTION OUTBOX (UPDATE EXISTING DAY POST, NO DUPLICATES)
     // =========================================================
     async function queueOfflineAction(actionType, payload) {
         try {
@@ -395,7 +392,6 @@ window.ParikramaOffline = (function() {
     async function submitDiaryPayloadToSupabase(p) {
         const uploadedUrls = Array.isArray(p.photo_urls) ? [...p.photo_urls] : [];
 
-        // Agar offline me pending base64/dataUrl photos hain to ImgBB par upload karein
         if (Array.isArray(p.pending_data_urls) && p.pending_data_urls.length > 0 && typeof window.uploadImageToImgBB === 'function') {
             for (const dataUrl of p.pending_data_urls) {
                 try {
@@ -407,6 +403,17 @@ window.ParikramaOffline = (function() {
                 } catch (err) {}
             }
         }
+
+        const finalPhotos = uploadedUrls.slice(0, 2);
+
+        // Pehle check karein ki isi yatri + yatra + day_number ka existing post pehle se hai ya nahi
+        const { data: existingRows } = await supabaseClient
+            .from('yatra_diaries')
+            .select('id, photo_urls')
+            .eq('yatra_id', p.yatra_id)
+            .eq('yatri_name', p.yatri_name)
+            .eq('day_number', p.day_number)
+            .order('created_at', { ascending: false });
 
         const row = {
             user_id: p.user_id || null,
@@ -420,13 +427,31 @@ window.ParikramaOffline = (function() {
             night_halt: p.night_halt,
             distance_km: p.distance_km,
             experience_text: p.experience_text,
-            photo_urls: uploadedUrls.slice(0, 2),
+            photo_urls: finalPhotos.length > 0 ? finalPhotos : (existingRows?.[0]?.photo_urls || []),
             status: 'pending'
         };
 
-        const { error } = await supabaseClient.from('yatra_diaries').insert([row]);
-        if (error) throw error;
-        return uploadedUrls.slice(0, 2);
+        if (Array.isArray(existingRows) && existingRows.length > 0) {
+            const primaryId = existingRows[0].id;
+            const { error: updErr } = await supabaseClient
+                .from('yatra_diaries')
+                .update(row)
+                .eq('id', primaryId);
+            if (updErr) throw updErr;
+
+            // Agar pehle se koi extra duplicate row thi to use hata dein
+            const extraIds = existingRows.slice(1).map(r => r.id);
+            if (extraIds.length > 0) {
+                await supabaseClient.from('yatra_diaries').delete().in('id', extraIds);
+            }
+        } else {
+            const { error: insErr } = await supabaseClient
+                .from('yatra_diaries')
+                .insert([row]);
+            if (insErr) throw insErr;
+        }
+
+        return row.photo_urls;
     }
 
     // =========================================================
@@ -485,7 +510,6 @@ window.ParikramaOffline = (function() {
             `;
         }
 
-        // Day-wise cards (newest first for easy editing)
         if (diaries.length > 0) {
             html += `<h4 style="margin:6px 0 8px 0; color:#d84315; font-size:14px;">📅 दिन-वार यात्रा रिकॉर्ड (Day-wise Log):</h4>`;
             const reversed = [...diaries].reverse();
@@ -523,7 +547,6 @@ window.ParikramaOffline = (function() {
             });
         }
 
-        // Inline Edit Form Container (Hidden until Edit clicked)
         html += `<div id="diaryDayEditorContainer" style="display:none; background:#f9fbe7; border:2px solid #8bc34a; border-radius:10px; padding:11px; margin-top:10px;"></div>`;
 
         bodyEl.innerHTML = html;
@@ -705,10 +728,14 @@ window.ParikramaOffline = (function() {
         await saveDiaryEntryRecord(rec);
         await openOfflineJourneyDiary();
 
+        if (typeof window.loadPublicYatraDiariesWall === 'function') {
+            window.loadPublicYatraDiariesWall();
+        }
+
         alert(shouldPublish
             ? (navigator.onLine
-                ? '✅ आपकी Day ' + rec.day_number + ' डायरी सुरक्षित हो गई है और एडमिन अप्रूवल के लिए भेज दी गई है!'
-                : '🟠 ऑफ़लाइन होने के कारण डायरी व फोटो फोन में सेव कर ली गई हैं। नेटवर्क आते ही अपने-आप अपलोड हो जाएंगी!')
+                ? '✅ आपकी Day ' + rec.day_number + ' डायरी अपडेट हो गई है और एडमिन अप्रूवल के लिए भेज दी गई है!'
+                : '🟠 ऑफ़लाइन होने के कारण डायरी व फोटो फोन में सेव कर ली गई हैं। नेटवर्क आते ही अपने-आप अपडेट हो जाएंगी!')
             : '✅ आपकी Day ' + rec.day_number + ' डायरी फोन में सुरक्षित कर ली गई है!'
         );
     }

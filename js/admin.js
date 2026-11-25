@@ -1287,7 +1287,13 @@ async function loadPublicYatraDiariesWall() {
                 }
                 photos = Array.isArray(photos) ? photos.slice(0, 2) : [];
                 const photoGrid = photos.length > 0
-                    ? `<div style="display:flex; gap:6px; margin-top:7px;">${photos.map(u => `<a href="${u}" target="_blank" style="flex:1;"><img src="${u}" alt="${d.yatri_name}" style="width:100%; height:95px; object-fit:cover; border-radius:7px; border:1px solid #ddd;"></a>`).join('')}</div>`
+                    ? `<div style="display:flex; gap:6px; margin-top:7px;">${photos.map(u => `<a href="${u}" target="_blank" style="flex:1;"><img src="${u}" alt="${d.yatri_name}" style="width:100%; height:85px; object-fit:cover; border-radius:7px; border:1px solid #ddd;"></a>`).join('')}</div>`
+                    : '';
+
+                const expText = (d.experience_text || '').trim();
+                const isLongText = expText.length > 130;
+                const readMoreBtnHtml = (window.ParikramaDiaryBlog && (isLongText || photoGrid))
+                    ? `<button type="button" onclick="ParikramaDiaryBlog.openDiaryById('${d.id}')" style="margin-top:7px; background:#fff3e0; color:#d84315; border:1px solid #ffb74d; padding:4px 10px; border-radius:6px; font-size:11.5px; font-weight:bold; cursor:pointer;">Read more ➔</button>`
                     : '';
 
                 return `
@@ -1301,8 +1307,9 @@ async function loadPublicYatraDiariesWall() {
                         <div style="font-size:12px; color:#1b5e20; background:#f1f8e9; padding:5px 7px; border-radius:6px; margin-bottom:6px;">
                             🚶 ${d.start_place || 'आरंभ'} ➔ 🛌 <b>${d.night_halt || 'विश्राम'}</b> (${d.distance_km || 0} km)
                         </div>
-                        ${d.experience_text ? `<p style="margin:0; font-size:12.5px; color:#333; line-height:1.55;">${d.experience_text}</p>` : ''}
+                        ${expText ? `<p style="margin:0; font-size:12.5px; color:#333; line-height:1.5; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;">${expText}</p>` : ''}
                         ${photoGrid}
+                        ${readMoreBtnHtml}
                     </article>
                 `;
             }).join('')}
