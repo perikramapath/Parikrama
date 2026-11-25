@@ -6,15 +6,32 @@
 window.ParikramaDiaryBlog = (function() {
     let allApprovedDiariesCache = [];
 
+    const YATRA_SLUG_ALIASES = {
+        'नर्मदा परिक्रमा': 'narmada_parikrama',
+        'माँ नर्मदा परिक्रमा': 'narmada_parikrama',
+        'narmada parikrama': 'narmada_parikrama',
+        'गिरनार परिक्रमा': 'girnar_parikrama',
+        'girnar parikrama': 'girnar_parikrama',
+        'ब्रज 84 कोस परिक्रमा': 'braj_84_kos_parikrama',
+        'braj 84 kos parikrama': 'braj_84_kos_parikrama'
+    };
+
     function slugifyPart(val) {
-        return (val || '')
-            .toString()
-            .toLowerCase()
-            .trim()
+        const raw = (val || '').toString().toLowerCase().trim();
+        if (!raw) return '';
+        if (YATRA_SLUG_ALIASES[raw]) return YATRA_SLUG_ALIASES[raw];
+
+        for (const [k, v] of Object.entries(YATRA_SLUG_ALIASES)) {
+            if (raw.includes(k.toLowerCase())) return v;
+        }
+
+        const cleaned = raw
             .replace(/[^\w\s-]/g, '')
             .replace(/\s+/g, '_')
             .replace(/-+/g, '_')
             .replace(/^_+|_+$/g, '');
+
+        return cleaned || 'yatra';
     }
 
     function getDiaryDaySlug(diary) {
@@ -59,7 +76,7 @@ window.ParikramaDiaryBlog = (function() {
         if (!forceRefresh && Array.isArray(allApprovedDiariesCache) && allApprovedDiariesCache.length > 0) {
             return allApprovedDiariesCache;
         }
-        if (!navigator.onLine || typeof supabaseClient === 'undefined') {
+        if (typeof supabaseClient === 'undefined') {
             return allApprovedDiariesCache;
         }
 
@@ -375,7 +392,10 @@ window.ParikramaDiaryBlog = (function() {
         ) || diaries.find(d =>
             slugifyPart(d.yatra_name) === parsed.yatraSlug &&
             getDiaryDaySlug(d) === parsed.daySlug
-        );
+        ) || diaries.find(d =>
+            slugifyPart(d.yatri_name) === parsed.userSlug &&
+            getDiaryDaySlug(d) === parsed.daySlug
+        ) || diaries.find(d => getDiaryDaySlug(d) === parsed.daySlug);
 
         if (matched) {
             renderSingleDiaryBlogPost(matched, diaries);
