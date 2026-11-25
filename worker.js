@@ -1,13 +1,42 @@
-// File Path: _worker.js (Root folder mein, index.html ke paas)
+// File Path: worker.js (Root folder mein, wrangler.jsonc ke "main" ke mutabik)
+
+function slugifyDiaryPart(val) {
+  const raw = (val || "").toString().toLowerCase().trim();
+  if (!raw) return "";
+
+  const aliases = {
+    "नर्मदा परिक्रमा": "narmada_parikrama",
+    "माँ नर्मदा परिक्रमा": "narmada_parikrama",
+    "narmada parikrama": "narmada_parikrama",
+    "गिरनार परिक्रमा": "girnar_parikrama",
+    "girnar parikrama": "girnar_parikrama",
+    "ब्रज 84 कोस परिक्रमा": "braj_84_kos_parikrama",
+    "braj 84 kos parikrama": "braj_84_kos_parikrama"
+  };
+
+  if (aliases[raw]) return aliases[raw];
+  for (const [k, v] of Object.entries(aliases)) {
+    if (raw.includes(k.toLowerCase())) return v;
+  }
+
+  const cleaned = raw
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/-+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return cleaned || "yatra";
+}
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const pathnameLower = url.pathname.toLowerCase();
 
-    // 1. Automatic Dynamic /sitemap.xml
+    // 1. Automatic Dynamic /sitemap.xml (Yatras + Approved Diary Posts)
     if (url.pathname === "/sitemap.xml") {
-      const SUPABASE_URL = "https://ohazukqrnmiycvkldeeq.supabase.co"; // <-- js/config.js se URL dalein
-      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9oYXp1a3Fybm1peWN2a2xkZWVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NzM5NTcsImV4cCI6MjExMDI0OTk1N30.6Hq116jqCeESuM9cWmmJljdAj6Mawjfnf_TCCFXDB-o";         // <-- js/config.js se Anon Key dalein
+      const SUPABASE_URL = "https://ohazukqrnmiycvkldeeq.supabase.co";
+      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9oYXp1a3Fybm1peWN2a2xkZWVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NzM5NTcsImV4cCI6MjExMDI0OTk1N30.6Hq116jqCeESuM9cWmmJljdAj6Mawjfnf_TCCFXDB-o";
 
       const fallbackSlugs = [
         "narmada-parikrama",
@@ -16,6 +45,7 @@ export default {
       ];
 
       let yatraXmlEntries = "";
+      let diaryXmlEntries = "";
 
       try {
         const response = await fetch(
@@ -71,7 +101,47 @@ export default {
           .join("\n");
       }
 
+      try {
+        const diaryResp = await fetch(
+          `${SUPABASE_URL}/rest/v1/yatra_diaries?select=yatri_name,yatra_name,day_number,diary_date,created_at&status=eq.approved&order=created_at.desc&limit=100`,
+          {
+            headers: {
+              "apikey": SUPABASE_ANON_KEY,
+              "Authorization": `Bearer ${SUPABASE_ANON_KEY}`
+            }
+          }
+        );
+
+        if (diaryResp.ok) {
+          const diaries = await diaryResp.json();
+          const seenLocs = new Set();
+          const diaryUrls = [];
+
+          for (const d of (Array.isArray(diaries) ? diaries : [])) {
+            const uSlug = slugifyDiaryPart(d.yatri_name) || "yatri";
+            const ySlug = slugifyDiaryPart(d.yatra_name) || "yatra";
+            const dayNum = parseInt(d.day_number, 10) || 1;
+            const loc = `https://parikramapath.in/diary/${uSlug}/${ySlug}/day-${dayNum}`;
+            if (seenLocs.has(loc)) continue;
+            seenLocs.add(loc);
+
+            const lastMod = (d.diary_date || d.created_at || new Date().toISOString()).split("T")[0];
+            diaryUrls.push(`  <url>
+    <loc>${loc}</loc>
+    <lastmod>${lastMod}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>`);
+          }
+
+          diaryXmlEntries = diaryUrls.join("\n");
+        }
+      } catch (err) {
+        // Diary sitemap fallback
+      }
+
       const todayDate = new Date().toISOString().split("T")[0];
+      const allEntries = [yatraXmlEntries, diaryXmlEntries].filter(Boolean).join("\n");
       const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
@@ -80,7 +150,7 @@ export default {
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
   </url>
-${yatraXmlEntries}
+${allEntries}
 </urlset>`;
 
       return new Response(sitemapXml, {
@@ -92,7 +162,13 @@ ${yatraXmlEntries}
       });
     }
 
-    // 2. Baaki sabhi files (index.html, js/*, style.css, etc.) normal serve karein
+    // 2. Clean BlogPost routes (/diary/<user>/<yatra>/<day>) -> serve index.html
+    if (pathnameLower.startsWith("/diary/") && env && env.ASSETS) {
+      const indexReq = new Request(new URL("/index.html", request.url), request);
+      return env.ASSETS.fetch(indexReq);
+    }
+
+    // 3. Baaki sabhi files (index.html, js/*, style.css, etc.) normal serve karein
     if (env && env.ASSETS) {
       return env.ASSETS.fetch(request);
     }
