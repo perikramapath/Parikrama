@@ -198,7 +198,35 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 2. DAY-WISE AUTOMATIC + EDITABLE + DELETABLE JOURNEY DIARY
+    // 2. MID-DAY STOPS PACKING / UNPACKING HELPERS
+    // =========================================================
+    function parseStopsFromDiaryTime(diaryTimeStr) {
+        const raw = (diaryTimeStr || '').toString();
+        const marker = '||STOPS:';
+        const idx = raw.indexOf(marker);
+        if (idx === -1) {
+            return { cleanTime: raw.trim(), stops: [] };
+        }
+        const cleanTime = raw.slice(0, idx).trim();
+        let stops = [];
+        try {
+            const parsed = JSON.parse(raw.slice(idx + marker.length).trim());
+            if (Array.isArray(parsed)) stops = parsed;
+        } catch (e) {}
+        return { cleanTime, stops };
+    }
+
+    function encodeDiaryTimeWithStops(cleanTime, stops) {
+        const base = (cleanTime || '').trim();
+        const validStops = Array.isArray(stops)
+            ? stops.filter(s => s && (s.name || '').trim()).slice(0, 4)
+            : [];
+        if (validStops.length === 0) return base;
+        return `${base} ||STOPS:${JSON.stringify(validStops)}`;
+    }
+
+    // =========================================================
+    // 3. DAY-WISE AUTOMATIC + EDITABLE + DELETABLE JOURNEY DIARY
     // =========================================================
     async function getAllSavedDiaries() {
         try {
@@ -323,7 +351,12 @@ window.ParikramaOffline = (function() {
                 }
                 photos = Array.isArray(photos) ? photos.slice(0, 2) : [];
 
-                const timeParts = (row.diary_time || '').split(' - ');
+                const { cleanTime, stops: remoteStops } = parseStopsFromDiaryTime(row.diary_time);
+                const timeParts = cleanTime.split(' - ');
+                const mergedStops = remoteStops.length > 0
+                    ? remoteStops
+                    : ((localMatch && Array.isArray(localMatch.visited_stops)) ? localMatch.visited_stops : []);
+
                 const merged = {
                     ...(localMatch || {}),
                     diary_key: localMatch ? localMatch.diary_key : dKey,
@@ -337,6 +370,7 @@ window.ParikramaOffline = (function() {
                     halt_time: (localMatch && localMatch.halt_time) || (timeParts[1] || '').trim() || '',
                     start_place: row.start_place || (localMatch && localMatch.start_place) || '',
                     night_halt: row.night_halt || (localMatch && localMatch.night_halt) || '',
+                    visited_stops: mergedStops,
                     distance_km: parseFloat(row.distance_km ?? (localMatch && localMatch.distance_km) ?? 0) || 0,
                     experience_text: row.experience_text || (localMatch && localMatch.experience_text) || '',
                     photo_urls: photos.length > 0 ? photos : ((localMatch && localMatch.photo_urls) || []),
@@ -449,8 +483,8 @@ window.ParikramaOffline = (function() {
         }
 
         const stops = Array.isArray(entry.visited_stops) ? entry.visited_stops : [];
-        if (!stops.some(s => String(s.id) === String(padavObj.id))) {
-            stops.push({ id: padavObj.id, name: padavObj.name, time: nowTime });
+        if (!stops.some(s => String(s.id) === String(padavObj.id)) && stops.length < 4) {
+            stops.push({ id: padavObj.id, name: padavObj.name, note: 'विश्राम', time: nowTime });
             entry.visited_stops = stops;
         }
 
@@ -464,7 +498,7 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 3. OFFLINE ACTION OUTBOX (UPDATE / DELETE REMOTE DIARY)
+    // 4. OFFLINE ACTION OUTBOX (UPDATE / DELETE REMOTE DIARY)
     // =========================================================
     async function queueOfflineAction(actionType, payload) {
         try {
@@ -602,7 +636,7 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 4. BATTERY SAVER GPS TOGGLE
+    // 5. BATTERY SAVER GPS TOGGLE
     // =========================================================
     function isBatterySaverEnabled() {
         return localStorage.getItem('parikrama_battery_saver') === '1';
@@ -623,7 +657,7 @@ window.ParikramaOffline = (function() {
     }
 
     // =========================================================
-    // 5. DAY-WISE EDITABLE & DELETABLE JOURNEY DIARY MODAL UI
+    // 6. DAY-WISE EDITABLE (WITH 2-4 MID-DAY STOPS) & DELETABLE UI
     // =========================================================
     async function deleteDiaryDayRecord(diaryKey) {
         const all = await getAllSavedDiaries();
@@ -714,6 +748,14 @@ window.ParikramaOffline = (function() {
                     ? `<div style="display:flex; gap:6px; margin-top:6px;">${photos.map(u => `<img src="${u}" style="width:58px; height:58px; object-fit:cover; border-radius:6px; border:1px solid #ccc;">`).join('')}</div>`
                     : '';
 
+                const midStops = Array.isArray(d.visited_stops) ? d.visited_stops.filter(s => s && s.name) : [];
+                const midStopsHtml = midStops.length > 0
+                    ? `<div style="margin:4px 0; padding:5px 7px; background:#fff8e1; border-left:3px solid #ffb300; border-radius:4px; font-size:11.5px; color:#4e342e;">
+                        <b>🍵 मध्य पड़ाव / विश्राम (${midStops.length}):</b><br>
+                        ${midStops.map((s, idx) => `${idx + 1}. <b>${s.name}</b>${s.note ? ' — ' + s.note : ''}${s.time ? ' <small style="color:#666;">(' + s.time + ')</small>' : ''}`).join('<br>')}
+                       </div>`
+                    : '';
+
                 const statusBadge = (d.publish_status === 'submitted' || d.publish_status === 'approved')
                     ? `<span style="background:#e3f2fd; color:#1565c0; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">🌐 सुरक्षित / प्रकाशित</span>`
                     : (d.publish_status === 'queued'
@@ -735,6 +777,7 @@ window.ParikramaOffline = (function() {
                         </div>
                         <div style="color:#333; line-height:1.55;">
                             <span>🚶 <b>प्रस्थान:</b> ${d.start_place || '-'} (${d.start_time || '--:--'})</span><br>
+                            ${midStopsHtml}
                             <span>🛌 <b>रात्रि विश्राम:</b> ${d.night_halt || 'अभी दर्ज नहीं'} ${d.halt_time ? `(${d.halt_time})` : ''}</span><br>
                             <span>📏 <b>चली गई दूरी:</b> <b style="color:#2e7d32;">${parseFloat(d.distance_km || 0).toFixed(1)} km</b></span>
                         </div>
@@ -752,6 +795,57 @@ window.ParikramaOffline = (function() {
 
         bodyEl.innerHTML = html;
         if (typeof showModal === 'function') showModal('offlineDiaryModal');
+    }
+
+    function addDiaryMidStopRow(stopObj = {}) {
+        const listEl = document.getElementById('diaryMidStopsList');
+        const addBtn = document.getElementById('btnAddDiaryMidStop');
+        if (!listEl) return;
+
+        const currentCount = listEl.querySelectorAll('.diary-mid-stop-row').length;
+        if (currentCount >= 4) {
+            alert('ℹ️ आप एक दिन में अधिकतम 4 मध्य पड़ाव (Points) ही जोड़ सकते हैं।');
+            return;
+        }
+
+        const idx = currentCount + 1;
+        const row = document.createElement('div');
+        row.className = 'diary-mid-stop-row';
+        row.style.cssText = 'background:#ffffff; border:1px solid #ffe082; border-radius:6px; padding:6px; margin-bottom:6px;';
+        row.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <span style="font-size:11px; font-weight:bold; color:#e65100;">📍 मध्य पड़ाव #${idx}</span>
+                <button type="button" onclick="ParikramaOffline.removeDiaryMidStopRow(this)" style="background:#ffcdd2; color:#b71c1c; border:none; border-radius:4px; padding:1px 6px; font-size:10.5px; font-weight:bold; cursor:pointer;">✖ हटाएं</button>
+            </div>
+            <input type="text" list="diaryPadavDatalist" class="form-input mid-stop-name" value="${(stopObj.name || '').replace(/"/g, '&quot;')}" placeholder="आश्रम / मंदिर / गाँव का नाम *" style="margin:0 0 4px 0; font-size:12px;">
+            <div style="display:flex; gap:5px;">
+                <input type="text" class="form-input mid-stop-note" value="${(stopObj.note || '').replace(/"/g, '&quot;')}" placeholder="जैसे: चाय-नाश्ता, सदाव्रत भोजन, दर्शन" style="margin:0; flex:1; font-size:11.5px;">
+                <input type="text" class="form-input mid-stop-time" value="${(stopObj.time || getNowTimeStr()).replace(/"/g, '&quot;')}" placeholder="11:30 AM" style="margin:0; width:92px; font-size:11.5px;">
+            </div>
+        `;
+        listEl.appendChild(row);
+
+        if (addBtn && listEl.querySelectorAll('.diary-mid-stop-row').length >= 4) {
+            addBtn.style.display = 'none';
+        }
+    }
+
+    function removeDiaryMidStopRow(btnEl) {
+        const listEl = document.getElementById('diaryMidStopsList');
+        const addBtn = document.getElementById('btnAddDiaryMidStop');
+        const row = btnEl && btnEl.closest('.diary-mid-stop-row');
+        if (row) row.remove();
+
+        if (listEl) {
+            const rows = listEl.querySelectorAll('.diary-mid-stop-row');
+            rows.forEach((r, i) => {
+                const lbl = r.querySelector('span');
+                if (lbl) lbl.innerText = `📍 मध्य पड़ाव #${i + 1}`;
+            });
+            if (addBtn && rows.length < 4) {
+                addBtn.style.display = 'inline-block';
+            }
+        }
     }
 
     async function openDiaryDayEditor(diaryKey) {
@@ -801,6 +895,17 @@ window.ParikramaOffline = (function() {
                 </div>
             </div>
 
+            <!-- START AUR NIGHT HALT KE BEECH 2-4 POINTS ADD KARNE KA SECTION -->
+            <div style="background:#fff8e1; border:1px dashed #ffb300; border-radius:8px; padding:8px; margin-bottom:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                    <span style="font-size:11.5px; font-weight:bold; color:#e65100;">🍵 रास्ते के पड़ाव / चाय-भोजन (2–4 Points):</span>
+                    <button type="button" id="btnAddDiaryMidStop" onclick="ParikramaOffline.addDiaryMidStopRow()" style="background:#ff9800; color:#fff; border:none; padding:4px 9px; border-radius:5px; font-size:11px; font-weight:bold; cursor:pointer;">
+                        ➕ Add Point
+                    </button>
+                </div>
+                <div id="diaryMidStopsList"></div>
+            </div>
+
             <div style="display:flex; gap:6px; margin-bottom:6px;">
                 <div style="flex:1;">
                     <label style="font-size:11px; font-weight:bold;">🛌 कहाँ रुके (Night Halt):</label>
@@ -834,6 +939,10 @@ window.ParikramaOffline = (function() {
                 </button>
             </div>
         `;
+
+        const existingStops = Array.isArray(rec.visited_stops) ? rec.visited_stops.slice(0, 4) : [];
+        existingStops.forEach(st => addDiaryMidStopRow(st));
+
         editorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
@@ -855,11 +964,22 @@ window.ParikramaOffline = (function() {
         const yatriName = (document.getElementById('editDiaryYatriName')?.value || '').trim() || 'परिक्रमावासी';
         localStorage.setItem('pp_diary_yatri_name', yatriName);
 
+        const collectedStops = [];
+        document.querySelectorAll('#diaryMidStopsList .diary-mid-stop-row').forEach(row => {
+            const nameVal = (row.querySelector('.mid-stop-name')?.value || '').trim();
+            const noteVal = (row.querySelector('.mid-stop-note')?.value || '').trim();
+            const timeVal = (row.querySelector('.mid-stop-time')?.value || '').trim();
+            if (nameVal && collectedStops.length < 4) {
+                collectedStops.push({ name: nameVal, note: noteVal, time: timeVal });
+            }
+        });
+
         rec.yatri_name = yatriName;
         rec.diary_date = document.getElementById('editDiaryDate')?.value || rec.diary_date;
         rec.distance_km = parseFloat(document.getElementById('editDiaryKm')?.value) || 0;
         rec.start_place = (document.getElementById('editDiaryStartPlace')?.value || '').trim();
         rec.start_time = (document.getElementById('editDiaryStartTime')?.value || '').trim();
+        rec.visited_stops = collectedStops;
         rec.night_halt = (document.getElementById('editDiaryNightHalt')?.value || '').trim();
         rec.halt_time = (document.getElementById('editDiaryHaltTime')?.value || '').trim();
         rec.experience_text = (document.getElementById('editDiaryExpText')?.value || '').trim();
@@ -895,6 +1015,9 @@ window.ParikramaOffline = (function() {
             rec.photo_urls = existingUrls.slice(-2);
         }
 
+        const baseTimeRange = `${rec.start_time || ''} - ${rec.halt_time || ''}`.trim();
+        const packedDiaryTime = encodeDiaryTimeWithStops(baseTimeRange, collectedStops);
+
         const shouldPublish = document.getElementById('chkPublishDiaryPublic')?.checked;
         if (shouldPublish) {
             const publicPayload = {
@@ -904,7 +1027,7 @@ window.ParikramaOffline = (function() {
                 yatra_name: effectiveYatraName,
                 day_number: rec.day_number,
                 diary_date: rec.diary_date,
-                diary_time: `${rec.start_time || ''} - ${rec.halt_time || ''}`.trim(),
+                diary_time: packedDiaryTime,
                 start_place: rec.start_place,
                 night_halt: rec.night_halt,
                 distance_km: rec.distance_km,
@@ -982,6 +1105,8 @@ window.ParikramaOffline = (function() {
         ensureTodayDiaryEntry,
         recordLiveGpsForDiary,
         recordPadavStopInDiary,
+        addDiaryMidStopRow,
+        removeDiaryMidStopRow,
         openDiaryDayEditor,
         saveDiaryDayEdit,
         deleteDiaryDayRecord,

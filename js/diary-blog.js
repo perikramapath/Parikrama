@@ -34,6 +34,25 @@ window.ParikramaDiaryBlog = (function() {
         return cleaned || 'yatra';
     }
 
+    function parseDiaryTimeAndStops(diary) {
+        const raw = (diary?.diary_time || '').toString();
+        const marker = '||STOPS:';
+        const idx = raw.indexOf(marker);
+        if (idx === -1) {
+            return {
+                cleanTime: raw.trim(),
+                stops: Array.isArray(diary?.visited_stops) ? diary.visited_stops : []
+            };
+        }
+        const cleanTime = raw.slice(0, idx).trim();
+        let stops = [];
+        try {
+            const parsed = JSON.parse(raw.slice(idx + marker.length).trim());
+            if (Array.isArray(parsed)) stops = parsed;
+        } catch (e) {}
+        return { cleanTime, stops };
+    }
+
     function getDiaryDaySlug(diary) {
         const dNum = parseInt(diary?.day_number, 10) || 1;
         return `day-${dNum}`;
@@ -186,7 +205,11 @@ window.ParikramaDiaryBlog = (function() {
 
         const shareUrl = buildDiaryFullUrl(d);
         const dayNum = parseInt(d.day_number, 10) || 1;
-        const shareText = `🚩 ${d.yatri_name} की ${d.yatra_name} डायरी — Day ${dayNum} (${d.diary_date || ''})\n🚶 ${d.start_place || '-'} ➔ 🛌 ${d.night_halt || '-'} (${d.distance_km || 0} km)\n\nपूरा अनुभव पढ़ें: ${shareUrl}`;
+        const { stops } = parseDiaryTimeAndStops(d);
+        const stopsLine = stops.length > 0
+            ? `\n🍵 मध्य पड़ाव: ${stops.map(s => `${s.name}${s.note ? ' (' + s.note + ')' : ''}`).join(' ➔ ')}`
+            : '';
+        const shareText = `🚩 ${d.yatri_name} की ${d.yatra_name} डायरी — Day ${dayNum} (${d.diary_date || ''})\n🚶 ${d.start_place || '-'}${stopsLine}\n🛌 रात्रि विश्राम: ${d.night_halt || '-'} (${d.distance_km || 0} km)\n\nपूरा अनुभव पढ़ें: ${shareUrl}`;
 
         if (navigator.share) {
             try {
@@ -247,10 +270,18 @@ window.ParikramaDiaryBlog = (function() {
         updateSeoForDiaryPost(diary);
 
         const dayNum = parseInt(diary.day_number, 10) || 1;
+        const { cleanTime, stops } = parseDiaryTimeAndStops(diary);
         const photos = normalizePhotos(diary.photo_urls);
         const photosHtml = photos.length > 0
             ? `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:8px; margin:12px 0;">
                 ${photos.map(u => `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${diary.yatri_name} Day ${dayNum}" style="width:100%; height:190px; object-fit:cover; border-radius:8px; border:1px solid #ffe0b2;"></a>`).join('')}
+               </div>`
+            : '';
+
+        const midStopsHtml = stops.length > 0
+            ? `<div style="margin-top:6px; padding-top:6px; border-top:1px dashed #a5d6a7; color:#33691e; font-size:12px;">
+                <b>🍵 रास्ते के पड़ाव / चाय-भोजन:</b><br>
+                ${stops.map((s, idx) => `${idx + 1}. <b>${s.name}</b>${s.note ? ' — ' + s.note : ''}${s.time ? ' (' + s.time + ')' : ''}`).join('<br>')}
                </div>`
             : '';
 
@@ -309,11 +340,12 @@ window.ParikramaDiaryBlog = (function() {
                     🚩 ${diary.yatri_name} — ${diary.yatra_name} डायरी | Day ${dayNum}
                 </h2>
                 <div style="font-size:12px; color:#666; margin-bottom:10px;">
-                    📅 ${diary.diary_date || ''} ${diary.diary_time ? '• 🕒 ' + diary.diary_time : ''}
+                    📅 ${diary.diary_date || ''} ${cleanTime ? '• 🕒 ' + cleanTime : ''}
                 </div>
 
                 <div style="background:#f1f8e9; padding:8px 10px; border-radius:8px; border-left:4px solid #2e7d32; font-size:12.5px; color:#1b5e20; margin-bottom:10px;">
                     🚶 <b>प्रस्थान:</b> ${diary.start_place || '-'} ➔ 🛌 <b>रात्रि विश्राम:</b> <b>${diary.night_halt || '-'}</b> • 📏 <b>दूरी:</b> <b>${diary.distance_km || 0} km</b>
+                    ${midStopsHtml}
                 </div>
 
                 <div style="font-size:14px; line-height:1.7; color:#222; white-space:pre-line;">
