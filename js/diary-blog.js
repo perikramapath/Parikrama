@@ -73,7 +73,7 @@ window.ParikramaDiaryBlog = (function() {
         return Array.isArray(arr) ? arr.filter(Boolean).slice(0, 2) : [];
     }
 
-    async function fetchDiariesForBlog(forceRefresh = false) {
+    async function fetchDiariesForBlog(forceRefresh = false, allowPendingFallback = false) {
         if (!forceRefresh && Array.isArray(allDiariesCache) && allDiariesCache.length > 0) {
             return allDiariesCache;
         }
@@ -93,15 +93,16 @@ window.ParikramaDiaryBlog = (function() {
                 return allDiariesCache;
             }
 
-            // Fallback: यदि अभी कोई approved रो नहीं मिली तो उपलब्ध रिकॉर्ड देखें
-            const { data: anyData, error: anyErr } = await supabaseClient
-                .from('yatra_diaries')
-                .select('*')
-                .order('created_at', { ascending: false })
-                .limit(25);
+            if (allowPendingFallback) {
+                const { data: anyData, error: anyErr } = await supabaseClient
+                    .from('yatra_diaries')
+                    .select('*')
+                    .order('created_at', { ascending: false })
+                    .limit(25);
 
-            if (!anyErr && Array.isArray(anyData) && anyData.length > 0) {
-                allDiariesCache = anyData;
+                if (!anyErr && Array.isArray(anyData) && anyData.length > 0) {
+                    return anyData;
+                }
             }
         } catch (e) {}
 
@@ -179,7 +180,7 @@ window.ParikramaDiaryBlog = (function() {
     }
 
     window.shareDiaryPost = async function(diaryId) {
-        const list = await fetchDiariesForBlog();
+        const list = await fetchDiariesForBlog(false, true);
         const d = list.find(item => String(item.id) === String(diaryId));
         if (!d) return;
 
@@ -333,7 +334,7 @@ window.ParikramaDiaryBlog = (function() {
         container.style.display = 'block';
         container.innerHTML = `<div style="background:#f9fbe7; border:1.5px solid #c5e1a5; border-radius:12px; padding:12px; font-size:13px;">⏳ यात्रियों की डायरियाँ लोड हो रही हैं...</div>`;
 
-        const diaries = await fetchDiariesForBlog(true);
+        const diaries = await fetchDiariesForBlog(true, false);
         if (!diaries || diaries.length === 0) {
             container.innerHTML = `
                 <div style="background:#f9fbe7; border:1.5px solid #c5e1a5; border-radius:12px; padding:12px; font-size:13px; color:#444;">
@@ -377,7 +378,7 @@ window.ParikramaDiaryBlog = (function() {
     }
 
     async function openDiaryById(diaryId) {
-        const diaries = await fetchDiariesForBlog();
+        const diaries = await fetchDiariesForBlog(false, true);
         const found = diaries.find(d => String(d.id) === String(diaryId));
         if (found) {
             renderSingleDiaryBlogPost(found, diaries);
@@ -407,7 +408,7 @@ window.ParikramaDiaryBlog = (function() {
             return;
         }
 
-        const diaries = await fetchDiariesForBlog(true);
+        const diaries = await fetchDiariesForBlog(true, true);
         if (!diaries || diaries.length === 0) return;
 
         const matched = diaries.find(d =>
