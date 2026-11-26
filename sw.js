@@ -1,4 +1,4 @@
-const CACHE_NAME = 'parikramapath-v14';
+const CACHE_NAME = 'parikramapath-v15';
 const TILE_CACHE = 'parikrama-map-tiles-v1';
 
 const APP_ASSETS = [
@@ -16,7 +16,8 @@ const APP_ASSETS = [
   '/js/map.js',
   '/js/auth-sos.js',
   '/js/live-yatris.js',
-  '/js/admin.js'
+  '/js/admin.js',
+  '/js/diary-blog.js'
 ];
 
 self.addEventListener('install', event => {
