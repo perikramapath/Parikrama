@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & DAY-WISE DIARY SYNC
+// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & CUSTOM ROUTE DISTANCE
 // =========================================================
 
 window.map = null;
@@ -74,7 +74,6 @@ function getSavedUserStartPadavLocal(yatra) {
     }
 }
 
-// Jab user upar wale "Start Point" button ya Menu se explicit change kare tabhi Gate khulega
 window.openStartPointChanger = function() {
     window.isExplicitlyChangingStartPoint = true;
     const mainApp = document.getElementById('mainAppContainer');
@@ -83,7 +82,6 @@ window.openStartPointChanger = function() {
     if (spGate) spGate.style.display = 'flex';
 };
 
-// Auto-bypass StartPointGate agar starting point pehle se permanently set/locked hai
 (function attachPermanentStartLockGuard() {
     if (typeof MutationObserver === 'undefined') return;
     document.addEventListener('DOMContentLoaded', () => {
@@ -349,138 +347,145 @@ window.searchQuickAddPadavLocation = async function() {
 };
 
 // =========================================================
-// CUSTOM ROUTE & REAL ROAD KM CALCULATOR (ZERO AIR DISTANCE)
+// CUSTOM ROUTE & REAL ROAD KM CALCULATOR (CUSTOM ROUTE FIRST)
 // =========================================================
-function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
+function getAllCustomRoutePolylines() {
     const routes = window.activeCustomRoutes || [];
-    const snapToleranceMeters = 450;
-
+    const list = [];
     for (const r of routes) {
-        const coords = r.coordinates;
-        if (!Array.isArray(coords) || coords.length < 2) continue;
-
-        let nearStart = false;
-        let nearEnd = false;
-
-        for (let i = 0; i < coords.length; i++) {
-            const pt = coords[i];
-            if (!Array.isArray(pt) || pt.length < 2) continue;
-
-            if (!nearStart && getDistanceInMeters(lat1, lng1, pt[0], pt[1]) <= snapToleranceMeters) {
-                nearStart = true;
-            }
-            if (!nearEnd && getDistanceInMeters(lat2, lng2, pt[0], pt[1]) <= snapToleranceMeters) {
-                nearEnd = true;
-            }
-            if (nearStart && nearEnd) return true;
+        if (!Array.isArray(r.coordinates) || r.coordinates.length < 2) continue;
+        const pts = r.coordinates
+            .map(pt => Array.isArray(pt) ? [parseFloat(pt[0]), parseFloat(pt[1])] : [parseFloat(pt.lat), parseFloat(pt.lng)])
+            .filter(pt => !isNaN(pt[0]) && !isNaN(pt[1]));
+        if (pts.length >= 2) {
+            list.push({ route: r, coords: pts });
         }
     }
-    return false;
+    return list;
+}
+
+function getNearestPointOnPolyline(lat, lng, coords) {
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+        const d = getDistanceInMeters(lat, lng, coords[i][0], coords[i][1]);
+        if (d < bestDist) {
+            bestDist = d;
+            bestIdx = i;
+        }
+    }
+    return { index: bestIdx, distMeters: bestDist };
+}
+
+function measurePolylineSegmentMeters(coords, idxA, idxB) {
+    const from = Math.min(idxA, idxB);
+    const to = Math.max(idxA, idxB);
+    let total = 0;
+    for (let i = from; i < to; i++) {
+        total += getDistanceInMeters(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
+    }
+    return total;
+}
+
+function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
+    const km = getCustomRouteKmBetween(lat1, lng1, lat2, lng2);
+    return km !== null && km > 0;
 }
 
 function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
-    const routes = window.activeCustomRoutes || [];
-    const snapToleranceMeters = 450;
+    const polylines = getAllCustomRoutePolylines();
+    if (polylines.length === 0) return null;
 
-    for (const r of routes) {
-        const coords = r.coordinates;
-        if (!Array.isArray(coords) || coords.length < 2) continue;
+    const snapToleranceMeters = 850;
+    let bestTotalMeters = Infinity;
 
-        let startIdx = -1;
-        let endIdx = -1;
-        let bestStartDist = snapToleranceMeters;
-        let bestEndDist = snapToleranceMeters;
+    // 1. Single custom route mein dono padav mil jayein
+    for (const { coords } of polylines) {
+        const nearStart = getNearestPointOnPolyline(lat1, lng1, coords);
+        const nearEnd = getNearestPointOnPolyline(lat2, lng2, coords);
 
-        for (let i = 0; i < coords.length; i++) {
-            const pt = coords[i];
-            if (!Array.isArray(pt) || pt.length < 2) continue;
-
-            const d1 = getDistanceInMeters(lat1, lng1, pt[0], pt[1]);
-            if (d1 <= bestStartDist) {
-                bestStartDist = d1;
-                startIdx = i;
+        if (nearStart.distMeters <= snapToleranceMeters && nearEnd.distMeters <= snapToleranceMeters) {
+            const segMeters = measurePolylineSegmentMeters(coords, nearStart.index, nearEnd.index);
+            const totalMeters = segMeters + (nearStart.distMeters > 40 ? nearStart.distMeters : 0) + (nearEnd.distMeters > 40 ? nearEnd.distMeters : 0);
+            if (totalMeters > 10 && totalMeters < bestTotalMeters) {
+                bestTotalMeters = totalMeters;
             }
-            const d2 = getDistanceInMeters(lat2, lng2, pt[0], pt[1]);
-            if (d2 <= bestEndDist) {
-                bestEndDist = d2;
-                endIdx = i;
-            }
-        }
-
-        if (startIdx !== -1 && endIdx !== -1 && startIdx !== endIdx) {
-            const from = Math.min(startIdx, endIdx);
-            const to = Math.max(startIdx, endIdx);
-            let totalMeters = 0;
-            for (let j = from; j < to; j++) {
-                totalMeters += getDistanceInMeters(
-                    coords[j][0], coords[j][1],
-                    coords[j + 1][0], coords[j + 1][1]
-                );
-            }
-            return parseFloat((totalMeters / 1000).toFixed(1));
         }
     }
+
+    if (bestTotalMeters < Infinity) {
+        return parseFloat((bestTotalMeters / 1000).toFixed(1));
+    }
+
+    // 2. Do jude hue (chained) custom route segments ke beech agar padav hain
+    for (let i = 0; i < polylines.length; i++) {
+        const rA = polylines[i].coords;
+        const startOnA = getNearestPointOnPolyline(lat1, lng1, rA);
+        if (startOnA.distMeters > snapToleranceMeters) continue;
+
+        for (let j = 0; j < polylines.length; j++) {
+            if (i === j) continue;
+            const rB = polylines[j].coords;
+            const endOnB = getNearestPointOnPolyline(lat2, lng2, rB);
+            if (endOnB.distMeters > snapToleranceMeters) continue;
+
+            // rA aur rB ke sabse nazdeeki junction बिंदु dhundhein
+            let bestJunctionDist = 450;
+            let jIdxA = -1;
+            let jIdxB = -1;
+            for (let a = 0; a < rA.length; a++) {
+                for (let b = 0; b < rB.length; b++) {
+                    const d = getDistanceInMeters(rA[a][0], rA[a][1], rB[b][0], rB[b][1]);
+                    if (d < bestJunctionDist) {
+                        bestJunctionDist = d;
+                        jIdxA = a;
+                        jIdxB = b;
+                    }
+                }
+            }
+
+            if (jIdxA !== -1 && jIdxB !== -1) {
+                const distA = measurePolylineSegmentMeters(rA, startOnA.index, jIdxA);
+                const distB = measurePolylineSegmentMeters(rB, jIdxB, endOnB.index);
+                const combined = distA + distB + bestJunctionDist + (startOnA.distMeters > 40 ? startOnA.distMeters : 0) + (endOnB.distMeters > 40 ? endOnB.distMeters : 0);
+                if (combined > 10 && combined < bestTotalMeters) {
+                    bestTotalMeters = combined;
+                }
+            }
+        }
+    }
+
+    if (bestTotalMeters < Infinity) {
+        return parseFloat((bestTotalMeters / 1000).toFixed(1));
+    }
+
     return null;
 }
 
 function getRemainingCustomRouteKmFromLiveGps(uLat, uLng, targetPadav) {
-    const routes = window.activeCustomRoutes || [];
-    const snapToleranceMeters = 550;
-
-    for (const r of routes) {
-        const coords = r.coordinates;
-        if (!Array.isArray(coords) || coords.length < 2) continue;
-
-        let userIdx = -1;
-        let targetIdx = -1;
-        let bestUserDist = snapToleranceMeters;
-        let bestTargetDist = 450;
-
-        for (let i = 0; i < coords.length; i++) {
-            const pt = coords[i];
-            if (!Array.isArray(pt) || pt.length < 2) continue;
-
-            const dUser = getDistanceInMeters(uLat, uLng, pt[0], pt[1]);
-            if (dUser <= bestUserDist) {
-                bestUserDist = dUser;
-                userIdx = i;
-            }
-            const dTarget = getDistanceInMeters(targetPadav.lat, targetPadav.lng, pt[0], pt[1]);
-            if (dTarget <= bestTargetDist) {
-                bestTargetDist = dTarget;
-                targetIdx = i;
-            }
-        }
-
-        if (userIdx !== -1 && targetIdx !== -1 && userIdx !== targetIdx) {
-            const from = Math.min(userIdx, targetIdx);
-            const to = Math.max(userIdx, targetIdx);
-            let totalMeters = 0;
-            for (let j = from; j < to; j++) {
-                totalMeters += getDistanceInMeters(
-                    coords[j][0], coords[j][1],
-                    coords[j + 1][0], coords[j + 1][1]
-                );
-            }
-            return parseFloat((totalMeters / 1000).toFixed(1));
-        }
-    }
-    return null;
+    if (!targetPadav || !targetPadav.lat || !targetPadav.lng) return null;
+    return getCustomRouteKmBetween(uLat, uLng, parseFloat(targetPadav.lat), parseFloat(targetPadav.lng));
 }
 
 function getResolvedPathKmSync(fromPadav, toPadav, savedKm, routeIdx = 0) {
     if (!fromPadav || !toPadav) return savedKm || null;
 
-    const customKm = getCustomRouteKmBetween(fromPadav.lat, fromPadav.lng, toPadav.lat, toPadav.lng);
+    // 1. Sabse pehle Custom Route ki duri check karein (Hamesha highest priority)
+    const customKm = getCustomRouteKmBetween(
+        parseFloat(fromPadav.lat), parseFloat(fromPadav.lng),
+        parseFloat(toPadav.lat), parseFloat(toPadav.lng)
+    );
     if (customKm !== null && customKm > 0) {
         return customKm;
     }
 
+    // 2. OSRM cached distance
     const cacheKey = `${fromPadav.id}_${toPadav.id}_${routeIdx}`;
     if (window.osrmDistanceCache[cacheKey]) {
         return window.osrmDistanceCache[cacheKey];
     }
 
+    // 3. Saved distance fallback
     if (savedKm && parseFloat(savedKm) > 0) {
         return parseFloat(savedKm);
     }
@@ -491,11 +496,23 @@ function getResolvedPathKmSync(fromPadav, toPadav, savedKm, routeIdx = 0) {
 async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
     if (!fromPadav || !toPadav) return null;
 
-    const customKm = getCustomRouteKmBetween(fromPadav.lat, fromPadav.lng, toPadav.lat, toPadav.lng);
-    if (customKm !== null && customKm > 0) return customKm;
+    const spanEl = document.getElementById(`km_badge_${fromPadav.id}_${toPadav.id}_${routeIdx}`);
+
+    // Agar custom route bana hai to hamesha wahi dikhayein
+    const customKm = getCustomRouteKmBetween(
+        parseFloat(fromPadav.lat), parseFloat(fromPadav.lng),
+        parseFloat(toPadav.lat), parseFloat(toPadav.lng)
+    );
+    if (customKm !== null && customKm > 0) {
+        if (spanEl) spanEl.innerText = `${customKm} km`;
+        return customKm;
+    }
 
     const cacheKey = `${fromPadav.id}_${toPadav.id}_${routeIdx}`;
-    if (window.osrmDistanceCache[cacheKey]) return window.osrmDistanceCache[cacheKey];
+    if (window.osrmDistanceCache[cacheKey]) {
+        if (spanEl) spanEl.innerText = `${window.osrmDistanceCache[cacheKey]} km`;
+        return window.osrmDistanceCache[cacheKey];
+    }
 
     if (!navigator.onLine) return null;
 
@@ -517,7 +534,6 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
                 window.osrmGeometryCache[cacheKey] = latLngs;
             }
 
-            const spanEl = document.getElementById(`km_badge_${fromPadav.id}_${toPadav.id}_${routeIdx}`);
             if (spanEl) {
                 spanEl.innerText = `${roadKm} km`;
             }
@@ -885,14 +901,9 @@ function renderSingleAdminLiveYatri(yatri, isGuest = false) {
     if (!yatri || !yatri.live_lat || !yatri.live_lng) return;
 
     const recordId = isGuest ? ('guest_' + yatri.visitor_id) : ('user_' + yatri.id);
-    const yatraId = isGuest ? yatri.yatra_id : yatri.active_yatra_id;
 
     if (!isGuest && window.currentUser && String(yatri.id) === String(window.currentUser.id)) return;
     if (isGuest && String(yatri.visitor_id) === String(getOrCreateGuestVisitorId())) return;
-
-    if (window.activeYatra && yatraId && String(yatraId) !== String(window.activeYatra.id)) {
-        return;
-    }
 
     if (!window.map.hasLayer(window.adminLiveYatrisLayer)) {
         window.adminLiveYatrisLayer.addTo(window.map);
@@ -1073,7 +1084,6 @@ function startYatriLiveProgressTracker() {
         updateMyBlueLocationDot(uLat, uLng, false);
         syncYatriLiveLocationToDb(uLat, uLng, false);
 
-        // Day-wise automatic distance & evening night-halt diary sync
         if (window.ParikramaOffline && typeof window.ParikramaOffline.recordLiveGpsForDiary === 'function') {
             window.ParikramaOffline.recordLiveGpsForDiary(uLat, uLng);
         }
@@ -1415,10 +1425,11 @@ async function drawAutoPadavConnectingLines(visibleList) {
 
         hudEntries.push({ target: targetP, liveKm: liveRemainingKm });
 
-        const hasCustomLine = hasCustomDrawnRouteBetween(
-            currentOriginPadav.lat, currentOriginPadav.lng,
-            targetP.lat, targetP.lng
+        const customPairKm = getCustomRouteKmBetween(
+            parseFloat(currentOriginPadav.lat), parseFloat(currentOriginPadav.lng),
+            parseFloat(targetP.lat), parseFloat(targetP.lng)
         );
+        const hasCustomLine = customPairKm !== null && customPairKm > 0;
 
         const buildTooltip = (kmValue) => {
             const kmText = kmValue ? ` • <b>${kmValue} km शेष</b>` : '';
@@ -1433,14 +1444,21 @@ async function drawAutoPadavConnectingLines(visibleList) {
             dashArray: '8, 8'
         };
 
+        // Agar Custom Route bana hai to OSRM ke bajay seedhe Custom Route ki duri dikhayein
+        if (hasCustomLine) {
+            const hudBadge = document.getElementById(`hud_live_km_${targetP.id}`);
+            if (hudBadge) {
+                hudBadge.innerHTML = `<b>${liveRemainingKm || customPairKm} km</b>`;
+            }
+            continue;
+        }
+
         if (hasLiveGps && navigator.onLine) {
             const liveCacheKey = `live_${targetP.id}`;
             if (window.osrmGeometryCache[liveCacheKey] && !shouldQueryLiveOsrm) {
-                if (!hasCustomLine) {
-                    L.polyline(window.osrmGeometryCache[liveCacheKey], dottedStyle)
-                        .bindPopup(buildTooltip(window.osrmDistanceCache[liveCacheKey] || liveRemainingKm))
-                        .addTo(window.autoPadavLinkLayer);
-                }
+                L.polyline(window.osrmGeometryCache[liveCacheKey], dottedStyle)
+                    .bindPopup(buildTooltip(window.osrmDistanceCache[liveCacheKey] || liveRemainingKm))
+                    .addTo(window.autoPadavLinkLayer);
                 const hudBadge = document.getElementById(`hud_live_km_${targetP.id}`);
                 if (hudBadge && window.osrmDistanceCache[liveCacheKey]) {
                     hudBadge.innerHTML = `<b>${window.osrmDistanceCache[liveCacheKey]} km</b>`;
@@ -1461,11 +1479,9 @@ async function drawAutoPadavConnectingLines(visibleList) {
                     const latLngs = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
                     window.osrmGeometryCache[liveCacheKey] = latLngs;
 
-                    if (!hasCustomLine) {
-                        L.polyline(latLngs, dottedStyle)
-                            .bindPopup(buildTooltip(finalKm))
-                            .addTo(window.autoPadavLinkLayer);
-                    }
+                    L.polyline(latLngs, dottedStyle)
+                        .bindPopup(buildTooltip(finalKm))
+                        .addTo(window.autoPadavLinkLayer);
 
                     const hudBadge = document.getElementById(`hud_live_km_${targetP.id}`);
                     if (hudBadge) {
@@ -1476,27 +1492,25 @@ async function drawAutoPadavConnectingLines(visibleList) {
             } catch (e) {}
         }
 
-        if (!hasCustomLine) {
-            const pairCacheKey = `${currentOriginPadav.id}_${targetP.id}_${idx}`;
+        const pairCacheKey = `${currentOriginPadav.id}_${targetP.id}_${idx}`;
+        if (window.osrmGeometryCache[pairCacheKey]) {
+            L.polyline(window.osrmGeometryCache[pairCacheKey], dottedStyle)
+                .bindPopup(buildTooltip(window.osrmDistanceCache[pairCacheKey] || liveRemainingKm))
+                .addTo(window.autoPadavLinkLayer);
+        } else if (navigator.onLine) {
+            const roadKm = await fetchRealRoadKmAsync(currentOriginPadav, targetP, idx);
             if (window.osrmGeometryCache[pairCacheKey]) {
                 L.polyline(window.osrmGeometryCache[pairCacheKey], dottedStyle)
-                    .bindPopup(buildTooltip(window.osrmDistanceCache[pairCacheKey] || liveRemainingKm))
-                    .addTo(window.autoPadavLinkLayer);
-            } else if (navigator.onLine) {
-                const roadKm = await fetchRealRoadKmAsync(currentOriginPadav, targetP, idx);
-                if (window.osrmGeometryCache[pairCacheKey]) {
-                    L.polyline(window.osrmGeometryCache[pairCacheKey], dottedStyle)
-                        .bindPopup(buildTooltip(roadKm || liveRemainingKm))
-                        .addTo(window.autoPadavLinkLayer);
-                }
-            } else {
-                const startPt = hasLiveGps
-                    ? [window.yatriLiveCoords.lat, window.yatriLiveCoords.lng]
-                    : [currentOriginPadav.lat, currentOriginPadav.lng];
-                L.polyline([startPt, [targetP.lat, targetP.lng]], dottedStyle)
-                    .bindPopup(buildTooltip(liveRemainingKm))
+                    .bindPopup(buildTooltip(roadKm || liveRemainingKm))
                     .addTo(window.autoPadavLinkLayer);
             }
+        } else {
+            const startPt = hasLiveGps
+                ? [window.yatriLiveCoords.lat, window.yatriLiveCoords.lng]
+                : [currentOriginPadav.lat, currentOriginPadav.lng];
+            L.polyline([startPt, [targetP.lat, targetP.lng]], dottedStyle)
+                .bindPopup(buildTooltip(liveRemainingKm))
+                .addTo(window.autoPadavLinkLayer);
         }
     }
 
@@ -1849,6 +1863,10 @@ async function saveManualDrawnRoute() {
 
     window.activeCustomRoutes.push(data || newRouteObj);
 
+    // Purana OSRM distance/geometry cache clear karein taaki nayi custom route duri turant dikhe
+    window.osrmDistanceCache = {};
+    window.osrmGeometryCache = {};
+
     if (window.ParikramaOffline) {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
     }
@@ -2008,6 +2026,10 @@ async function saveGpsFollowedRoute() {
     if (error) return alert("Save Error: " + error.message);
 
     window.activeCustomRoutes.push(data || newRouteObj);
+
+    // Purana OSRM distance/geometry cache clear karein taaki nayi custom route duri turant dikhe
+    window.osrmDistanceCache = {};
+    window.osrmGeometryCache = {};
 
     if (window.ParikramaOffline) {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
