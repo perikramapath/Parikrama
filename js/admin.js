@@ -77,6 +77,14 @@ function syncPadavInMemory(padavObj) {
 
 async function fetchActualRoadKm(lat1, lng1, lat2, lng2) {
     if (isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) return 0;
+
+    if (typeof getCustomRouteKmBetween === 'function') {
+        const customKm = getCustomRouteKmBetween(lat1, lng1, lat2, lng2);
+        if (customKm !== null && customKm > 0) {
+            return customKm;
+        }
+    }
+
     try {
         const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=false`;
         const res = await fetch(url);
@@ -263,7 +271,7 @@ async function addNextPadavToList(silent = false) {
     }
 
     const box = document.getElementById('selectedNextPadavsList');
-    if (box) box.innerHTML = '<small style="color:#0288d1;">⏳ सड़क से वास्तविक दूरी कैलकुलेट हो रही है...</small>';
+    if (box) box.innerHTML = '<small style="color:#0288d1;">⏳ मार्ग से वास्तविक दूरी कैलकुलेट हो रही है...</small>';
 
     const pathStyle = document.getElementById('nextPadavPathSelect').value;
     const roadKm = await fetchActualRoadKm(lat1, lng1, parseFloat(opt.dataset.lat), parseFloat(opt.dataset.lng));
@@ -308,7 +316,7 @@ function renderTempNextPadavsList() {
     }
     box.innerHTML = window.tempNextPadavs.map((item, idx) => `
         <div style="display:flex; justify-content:space-between; align-items:center; background:white; padding:5px 8px; border-radius:4px; margin-top:4px; border:1px solid #ddd;">
-            <span><b>${item.name}</b> (${item.path} • <b>${item.km} km Road</b>)</span>
+            <span><b>${item.name}</b> (${item.path} • <b>${item.km} km</b>)</span>
             <button type="button" onclick="removeTempNextPadav(${idx})" style="background:#dc3545; color:white; border:none; border-radius:3px; padding:2px 6px; cursor:pointer;">✖</button>
         </div>
     `).join('');
