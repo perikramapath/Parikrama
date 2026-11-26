@@ -345,7 +345,9 @@ async function saveCompleteProfile() {
         mobile: mobile,
         blood_group: bloodGroup || null,
         emergency_contact: emergency || null,
-        address: address || null
+        address: address || null,
+        role: (window.currentProfile && window.currentProfile.role) || 'pilgrim',
+        status: (window.currentProfile && window.currentProfile.status) || 'approved'
     };
 
     if (capturedSelfieBase64) {
@@ -358,7 +360,7 @@ async function saveCompleteProfile() {
             id: window.currentUser.id,
             email: window.currentUser.email,
             ...updates
-        })
+        }, { onConflict: 'id' })
         .select()
         .single();
 
@@ -519,6 +521,13 @@ function stopSosBuzzer() {
     }
 }
 
+// Browser autoplay policy se bachne ke liye pehle click/touch par audio unlock karein
+document.addEventListener('pointerdown', () => {
+    if (sosAudioCtx && sosAudioCtx.state === 'suspended') {
+        sosAudioCtx.resume().catch(() => {});
+    }
+}, { passive: true });
+
 function playSosBeep() {
     stopSosBuzzer();
     try {
@@ -599,7 +608,10 @@ async function showIncomingSosBanner(sos) {
 }
 
 async function startLiveSosListener() {
-    if (sosRealtimeChannel) return;
+    if (sosRealtimeChannel) {
+        try { await supabaseClient.removeChannel(sosRealtimeChannel); } catch (e) {}
+        sosRealtimeChannel = null;
+    }
 
     const cleanRole = (window.currentProfile.role || '').toLowerCase().trim().replace(/\s+/g, '_');
     const isGlobalAdmin = (cleanRole === 'super_admin' || cleanRole === 'admin');
