@@ -13,7 +13,7 @@ function sortYatrasNarmadaFirst(list) {
 
         if (aIsNarmada && !bIsNarmada) return -1;
         if (!aIsNarmada && bIsNarmada) return 1;
-        return 0; // Baaki yatras apne add hone ke kram (created_at) me niche rahengi
+        return 0;
     });
 }
 
@@ -40,30 +40,48 @@ async function loadAllYatras() {
     document.getElementById('yatraSearchInput').placeholder = t('searchYatra');
     document.getElementById('langToggleBtn').innerText = t('langToggle');
 
-    try {
-        // created_at ascending order taaki nayi add ki gayi yatra niche aaye
-        const { data, error } = await supabaseClient
-            .from('yatras')
-            .select('*')
-            .order('created_at', { ascending: true });
+    let loadedList = [];
 
-        if (error) throw error;
+    if (navigator.onLine) {
+        try {
+            const { data, error } = await supabaseClient
+                .from('yatras')
+                .select('*')
+                .order('created_at', { ascending: true });
 
-        // Narmada Parikrama ko hamesha sabse pehle rakhein
-        window.allYatras = sortYatrasNarmadaFirst(data || []);
-        renderYatraCards(window.allYatras);
-        if (typeof populateSevadarYatraDropdown === 'function') populateSevadarYatraDropdown(window.allYatras);
-
-        // Clean SEO URL (/yatra/girnar-parikrama) ya query param (?yatra=girnar-parikrama) dono support
-        const pathMatch = window.location.pathname.match(/^\/yatra\/([^\/]+)/);
-        const directSlug = (pathMatch && pathMatch[1]) || new URLSearchParams(window.location.search).get('yatra');
-        if (directSlug) {
-            const matched = window.allYatras.find(y => y.slug === directSlug);
-            if (matched) openStartPointGate(matched.id);
+            if (!error && Array.isArray(data)) {
+                loadedList = data;
+            }
+        } catch (err) {
+            console.warn('Online yatras fetch failed, checking offline cache:', err);
         }
-    } catch (err) {
-        console.error(err);
-        document.getElementById('yatraCardsGrid').innerHTML = `<p style="color:red;">डेटा लोड करने में त्रुटि। कृपया रिफ्रेश करें।</p>`;
+    }
+
+    // Offline fallback: agar internet nahi hai to IndexedDB se saved yatras nikalein
+    if (loadedList.length === 0 && window.ParikramaOffline) {
+        try {
+            const packs = await window.ParikramaOffline.getAllSavedYatraPacks();
+            if (Array.isArray(packs) && packs.length > 0) {
+                loadedList = packs.map(p => p.yatra).filter(Boolean);
+            }
+        } catch (e) {}
+    }
+
+    if (loadedList.length === 0) {
+        document.getElementById('yatraCardsGrid').innerHTML = `<p style="color:red;">डेटा लोड करने में त्रुटि। कृपया इंटरनेट कनेक्शन जांचकर रिफ्रेश करें।</p>`;
+        return;
+    }
+
+    window.allYatras = sortYatrasNarmadaFirst(loadedList);
+    renderYatraCards(window.allYatras);
+    if (typeof populateSevadarYatraDropdown === 'function') populateSevadarYatraDropdown(window.allYatras);
+
+    // Clean SEO URL (/yatra/girnar-parikrama) ya query param (?yatra=girnar-parikrama) dono support
+    const pathMatch = window.location.pathname.match(/^\/yatra\/([^\/]+)/);
+    const directSlug = (pathMatch && pathMatch[1]) || new URLSearchParams(window.location.search).get('yatra');
+    if (directSlug) {
+        const matched = window.allYatras.find(y => y.slug === directSlug);
+        if (matched) openStartPointGate(matched.id);
     }
 }
 
@@ -100,15 +118,71 @@ function filterYatraCards() {
     renderYatraCards(filtered);
 }
 
-async function openStartPointGate(yatraId) {
-    const yatra = window.allYatras.find(y => y.id === yatraId);
+function getLockedStartPadavForYatra(yatra) {
+    if (!yatra) return null;
+    try {
+        const slug = (yatra.slug || yatra.id || 'default').toString().toLowerCase().trim();
+        const raw = localStorage.getItem(`parikrama_start_padav_${slug}`);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function openStartPointGate(yatraId, forceOpenGate = false) {
+    const yatra = window.allYatras.find(y => String(y.id) === String(yatraId));
     if (!yatra) return;
 
     window.activeYatra = yatra;
-    window.selectedStartPadav = null;
-
-    // SEO Title & Meta Description Update
     updateYatraSeoMeta(yatra);
+
+    // Padavs fetch karein (Online + Offline cache fallback)
+    let padavs = [];
+    const cleanRole = (window.currentProfile?.role || '').toLowerCase().trim().replace(/\s+/g, '_');
+    const isStaff = (cleanRole === 'super_admin' || cleanRole === 'admin' || cleanRole === 'moderator');
+
+    if (navigator.onLine) {
+        try {
+            let query = supabaseClient
+                .from('padavs')
+                .select('*')
+                .eq('yatra_id', yatra.id)
+                .order('sequence_no', { ascending: true });
+
+            if (!isStaff) {
+                query = query.eq('status', 'approved');
+            }
+
+            const { data } = await query;
+            if (Array.isArray(data)) padavs = data;
+        } catch (e) {}
+    }
+
+    if (padavs.length === 0 && window.ParikramaOffline) {
+        const offlinePack = await window.ParikramaOffline.getYatraOfflinePack(yatra.id || yatra.slug);
+        if (offlinePack && Array.isArray(offlinePack.padavs)) {
+            padavs = offlinePack.padavs;
+        }
+    }
+
+    window.yatraPadavsForSelection = padavs;
+
+    // Agar user explicit change nahi kar raha aur Start Point pehle se lock hai to seedhe Map kholein
+    if (!forceOpenGate && !window.isExplicitlyChangingStartPoint) {
+        const lockedStart = getLockedStartPadavForYatra(yatra);
+        if (lockedStart && lockedStart.id) {
+            const matchedPadav = padavs.find(p => String(p.id) === String(lockedStart.id)) || lockedStart;
+            window.selectedStartPadav = matchedPadav;
+            window.calculatedEndPoint = yatra.yatra_type === 'circular'
+                ? `${matchedPadav.name} (परिक्रमा पूर्ण)`
+                : (yatra.default_end_point || 'मुख्य धाम');
+            document.getElementById('yatraGate').style.display = 'none';
+            await launchYatraMap();
+            return;
+        }
+    }
+
+    window.selectedStartPadav = null;
 
     document.getElementById('yatraGate').style.display = 'none';
     document.getElementById('startPointGate').style.display = 'flex';
@@ -123,17 +197,6 @@ async function openStartPointGate(yatraId) {
     document.getElementById('spYatraMeta').innerText = `${yatra.state} • ${yatra.total_distance_km || 0} km`;
     document.getElementById('selectedYatraHeader').style.borderLeftColor = yatra.theme_color;
 
-    const dropdown = document.getElementById('startPointDropdown');
-    dropdown.innerHTML = '<option value="">पड़ाव लोड हो रहे हैं...</option>';
-
-    const { data: padavs } = await supabaseClient
-        .from('padavs')
-        .select('*')
-        .eq('yatra_id', yatraId)
-        .eq('status', 'approved')
-        .order('sequence_no', { ascending: true });
-
-    window.yatraPadavsForSelection = padavs || [];
     renderStartPointDropdown(window.yatraPadavsForSelection);
 }
 
@@ -170,7 +233,7 @@ function onStartPointSelected(padavId) {
         window.calculatedEndPoint = window.activeYatra.default_end_point || 'यात्रा समापन';
         summaryBox.style.display = 'none';
     } else {
-        const padav = window.yatraPadavsForSelection.find(p => p.id === padavId);
+        const padav = window.yatraPadavsForSelection.find(p => String(p.id) === String(padavId));
         if (!padav) return;
         window.selectedStartPadav = padav;
         summaryBox.style.display = 'block';
@@ -193,6 +256,7 @@ function onStartPointSelected(padavId) {
 }
 
 async function launchYatraMap() {
+    window.isExplicitlyChangingStartPoint = false;
     document.getElementById('startPointGate').style.display = 'none';
     document.getElementById('mainAppContainer').style.display = 'block';
 
@@ -210,13 +274,15 @@ async function launchYatraMap() {
         subSelect.appendChild(opt);
     });
 
-    if (window.currentUser) {
-        await supabaseClient.from('profiles').update({
-            active_yatra_id: window.activeYatra.id,
-            start_point_id: window.selectedStartPadav ? window.selectedStartPadav.id : null,
-            start_point_name: window.selectedStartPadav ? window.selectedStartPadav.name : 'Not Set',
-            end_point_name: window.calculatedEndPoint
-        }).eq('id', window.currentUser.id);
+    if (window.currentUser && navigator.onLine) {
+        try {
+            await supabaseClient.from('profiles').update({
+                active_yatra_id: window.activeYatra.id,
+                start_point_id: window.selectedStartPadav ? window.selectedStartPadav.id : null,
+                start_point_name: window.selectedStartPadav ? window.selectedStartPadav.name : 'Not Set',
+                end_point_name: window.calculatedEndPoint
+            }).eq('id', window.currentUser.id);
+        } catch (e) {}
     }
 
     await initAndLoadIsolatedMap();
@@ -230,8 +296,9 @@ function backToYatraGate() {
 }
 
 function openStartPointChanger() {
+    window.isExplicitlyChangingStartPoint = true;
     document.getElementById('mainAppContainer').style.display = 'none';
-    openStartPointGate(window.activeYatra.id);
+    openStartPointGate(window.activeYatra.id, true);
 }
 
 function openYatraSeoPage() {
