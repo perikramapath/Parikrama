@@ -584,26 +584,18 @@ function isSameNarmadaTat(padavA, padavB) {
 }
 
 function isCorrectNarmadaDirection(fromPadav, toPadav) {
-    // Narmada nadi kai jagah (Mandla, Dindori, Deogaon Sangam aadi) uttar-dakshin ya mod leti hai.
-    // Isliye agar dono padavon ke beech custom route bana hai to hamesha valid maanein.
-    if (hasCustomDrawnRouteBetween(
-        parseFloat(fromPadav.lat), parseFloat(fromPadav.lng),
-        parseFloat(toPadav.lat), parseFloat(toPadav.lng)
-    )) {
-        return true;
-    }
-
     const dir = getNarmadaTatDirection(fromPadav.sub_route);
     const fromLng = parseFloat(fromPadav.lng);
     const toLng = parseFloat(toPadav.lng);
     if (isNaN(fromLng) || isNaN(toLng)) return true;
 
-    // Nadi ke local North-South bends ke liye 0.04 degree (~4 km) ka tolerance rakhein
+    // Dakshin Tat par hamesha Pashchim (West: toLng < fromLng) ki aur agala padav hoga
     if (dir === 'dakshin') {
-        return toLng <= (fromLng + 0.04);
+        return toLng < (fromLng - 0.0005);
     }
+    // Uttar Tat par hamesha Purab (East: toLng > fromLng) ki aur agala padav hoga
     if (dir === 'uttar') {
-        return toLng >= (fromLng - 0.04);
+        return toLng > (fromLng + 0.0005);
     }
     return true;
 }
@@ -616,19 +608,20 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
     const manualList = Array.isArray(rawNext) ? rawNext : [];
 
     if (isNarmadaParikrama) {
-        // 1. User/Admin dwara manually jode gaye agale padav ko hamesha sabse pehle dikhayein (nadi ke mod par bhi block na ho)
+        // 1. User/Admin dwara manually jode gaye agale padav ko check karein (Dakshin -> Pashchim, Uttar -> Purab)
         const sameTatManual = manualList.filter(np => {
             if (window.abandonedBranchIds.has(np.id)) return false;
             const targetObj = (window.activeYatraPadavs || []).find(item => String(item.id) === String(np.id));
             if (!targetObj) return false;
-            return isSameNarmadaTat(p, targetObj);
+            if (!isSameNarmadaTat(p, targetObj)) return false;
+            return isCorrectNarmadaDirection(p, targetObj);
         });
 
         if (sameTatManual.length > 0) {
             return { list: sameTatManual, isAuto: false };
         }
 
-        // 2. Agar manual next_padavs nahi hai to auto-suggest mein custom route ya disha check karein
+        // 2. Agar manual next_padavs nahi hai to auto-suggest mein disha (Dakshin -> Pashchim, Uttar -> Purab) check karein
         const sameTatCandidates = (window.activeYatraPadavs || [])
             .filter(other => {
                 if (String(other.id) === String(p.id)) return false;
@@ -1409,7 +1402,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
             const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
             if (!targetP || !targetP.lat || !targetP.lng) return null;
             if (isNarmadaParikrama && !isSameNarmadaTat(currentOriginPadav, targetP)) return null;
-            if (isNarmadaParikrama && synced.isAuto && !isCorrectNarmadaDirection(currentOriginPadav, targetP)) return null;
+            if (isNarmadaParikrama && !isCorrectNarmadaDirection(currentOriginPadav, targetP)) return null;
             return { np, targetP, idx };
         })
         .filter(Boolean);
