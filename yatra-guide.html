@@ -122,7 +122,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="/js/config.js?v=5"></script>
+<script src="/js/config.js?v=14"></script>
 <script>
     let loadedYatra = null;
     let allLoadedPadavs = [];
@@ -217,7 +217,6 @@
     }
 
     async function loadYatraGuidePage() {
-        // 1. Clean URL (/yatra/girnar-parikrama) ya Query Param (?slug=girnar-parikrama) dono se slug nikalen
         const pathMatch = window.location.pathname.match(/^\/yatra\/([^\/]+)/);
         const slug = (pathMatch && pathMatch[1]) || new URLSearchParams(window.location.search).get('slug');
 
@@ -246,7 +245,7 @@
         const displayName = yatra.name_hi ? `${yatra.name_hi} (${yatra.name})` : yatra.name;
         const pageTitle = yatra.meta_title || `${displayName} - Route Map, Ashram & Niyam | Parikramapath`;
         const pageDesc = yatra.meta_description || `${displayName} (${yatra.state}) ki sampurna jankari, ${yatra.total_distance_km || 0} km parikrama marg, ashram, bhojan aur niyam dekhein.`;
-        const canonicalUrl = `https://parikramapath.in/yatra/${yatra.slug}`;
+        const canonicalUrl = `https://parikramapath.in/yatra-guide.html?slug=${encodeURIComponent(yatra.slug)}`;
 
         document.title = pageTitle;
         document.getElementById('seoDesc').setAttribute('content', pageDesc);
