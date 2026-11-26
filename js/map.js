@@ -429,7 +429,6 @@ function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
             const endOnB = getNearestPointOnPolyline(lat2, lng2, rB);
             if (endOnB.distMeters > snapToleranceMeters) continue;
 
-            // rA aur rB ke sabse nazdeeki junction बिंदु dhundhein
             let bestJunctionDist = 450;
             let jIdxA = -1;
             let jIdxB = -1;
@@ -585,16 +584,26 @@ function isSameNarmadaTat(padavA, padavB) {
 }
 
 function isCorrectNarmadaDirection(fromPadav, toPadav) {
+    // Narmada nadi kai jagah (Mandla, Dindori, Deogaon Sangam aadi) uttar-dakshin ya mod leti hai.
+    // Isliye agar dono padavon ke beech custom route bana hai to hamesha valid maanein.
+    if (hasCustomDrawnRouteBetween(
+        parseFloat(fromPadav.lat), parseFloat(fromPadav.lng),
+        parseFloat(toPadav.lat), parseFloat(toPadav.lng)
+    )) {
+        return true;
+    }
+
     const dir = getNarmadaTatDirection(fromPadav.sub_route);
     const fromLng = parseFloat(fromPadav.lng);
     const toLng = parseFloat(toPadav.lng);
     if (isNaN(fromLng) || isNaN(toLng)) return true;
 
+    // Nadi ke local North-South bends ke liye 0.04 degree (~4 km) ka tolerance rakhein
     if (dir === 'dakshin') {
-        return toLng < (fromLng - 0.001);
+        return toLng <= (fromLng + 0.04);
     }
     if (dir === 'uttar') {
-        return toLng > (fromLng + 0.001);
+        return toLng >= (fromLng - 0.04);
     }
     return true;
 }
@@ -607,18 +616,19 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
     const manualList = Array.isArray(rawNext) ? rawNext : [];
 
     if (isNarmadaParikrama) {
+        // 1. User/Admin dwara manually jode gaye agale padav ko hamesha sabse pehle dikhayein (nadi ke mod par bhi block na ho)
         const sameTatManual = manualList.filter(np => {
             if (window.abandonedBranchIds.has(np.id)) return false;
             const targetObj = (window.activeYatraPadavs || []).find(item => String(item.id) === String(np.id));
             if (!targetObj) return false;
-            if (!isSameNarmadaTat(p, targetObj)) return false;
-            return isCorrectNarmadaDirection(p, targetObj);
+            return isSameNarmadaTat(p, targetObj);
         });
 
         if (sameTatManual.length > 0) {
             return { list: sameTatManual, isAuto: false };
         }
 
+        // 2. Agar manual next_padavs nahi hai to auto-suggest mein custom route ya disha check karein
         const sameTatCandidates = (window.activeYatraPadavs || [])
             .filter(other => {
                 if (String(other.id) === String(p.id)) return false;
@@ -629,8 +639,14 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
                 return isCorrectNarmadaDirection(p, other);
             })
             .map(other => {
-                const knownKm = getResolvedPathKmSync(p, other, null, 0);
-                const sortOrderMetric = knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng);
+                const customKm = getCustomRouteKmBetween(
+                    parseFloat(p.lat), parseFloat(p.lng),
+                    parseFloat(other.lat), parseFloat(other.lng)
+                );
+                const knownKm = customKm !== null ? customKm : getResolvedPathKmSync(p, other, null, 0);
+                // Jis padav tak custom route bana hai use sabse upar rakhein
+                const priorityBonus = (customKm !== null && customKm > 0) ? -50000 : 0;
+                const sortOrderMetric = (knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng)) + priorityBonus;
                 return {
                     id: other.id,
                     name: other.name,
@@ -1393,7 +1409,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
             const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
             if (!targetP || !targetP.lat || !targetP.lng) return null;
             if (isNarmadaParikrama && !isSameNarmadaTat(currentOriginPadav, targetP)) return null;
-            if (isNarmadaParikrama && !isCorrectNarmadaDirection(currentOriginPadav, targetP)) return null;
+            if (isNarmadaParikrama && synced.isAuto && !isCorrectNarmadaDirection(currentOriginPadav, targetP)) return null;
             return { np, targetP, idx };
         })
         .filter(Boolean);
