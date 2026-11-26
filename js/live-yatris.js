@@ -5,6 +5,7 @@
 let yatriPingInterval = null;
 let adminLiveLayer = null;
 let adminLiveRealtime = null;
+let adminGuestRealtime = null;
 let liveYatriMarkers = {};
 let isAdminLiveVisible = true;
 let cachedYatrasNameMap = {};
@@ -16,10 +17,13 @@ function isStrictAdmin() {
 }
 
 async function ensureYatrasNameMap() {
-    if (Object.keys(cachedYatrasNameMap).length > 0) return cachedYatrasNameMap;
-
     if (Array.isArray(window.allYatrasList)) {
         window.allYatrasList.forEach(y => {
+            cachedYatrasNameMap[String(y.id)] = y.name_hi || y.name;
+        });
+    }
+    if (Array.isArray(window.allYatras)) {
+        window.allYatras.forEach(y => {
             cachedYatrasNameMap[String(y.id)] = y.name_hi || y.name;
         });
     }
@@ -109,10 +113,13 @@ function getMapInstance() {
     return window.map || (typeof map !== 'undefined' ? map : null);
 }
 
-function plotSingleYatriMarker(yatri) {
+function plotSingleYatriMarker(yatri, isGuest = false) {
     if (!isStrictAdmin()) return;
     const mapObj = getMapInstance();
-    if (!mapObj || !yatri.live_lat || !yatri.live_lng) return;
+    if (!mapObj || !yatri || !yatri.live_lat || !yatri.live_lng) return;
+
+    const markerKey = isGuest ? `guest_${yatri.visitor_id}` : `user_${yatri.id}`;
+    const yatraId = isGuest ? yatri.yatra_id : yatri.active_yatra_id;
 
     if (!adminLiveLayer) {
         adminLiveLayer = L.layerGroup().addTo(mapObj);
@@ -124,37 +131,54 @@ function plotSingleYatriMarker(yatri) {
         ? new Date(yatri.last_seen_at).toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' })
         : 'अभी';
 
-    const yatraLabel = yatri.active_yatra_id
-        ? (cachedYatrasNameMap[String(yatri.active_yatra_id)] || 'सक्रिय परिक्रमा')
+    const yatraLabel = yatraId
+        ? (cachedYatrasNameMap[String(yatraId)] || 'सक्रिय परिक्रमा')
         : 'परिक्रमा';
+
+    const bgColor = isGuest ? '#e65100' : '#1565c0';
+    const emoji = isGuest ? '🧭' : '🚶';
 
     const icon = L.divIcon({
         className: 'admin-live-yatri-pin',
-        html: `<div style="background:#1565c0; color:#fff; border:2px solid #fff; border-radius:50%; width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:15px; box-shadow:0 2px 8px rgba(0,0,0,0.45);">🚶</div>`,
+        html: `<div style="background:${bgColor}; color:#fff; border:2px solid #fff; border-radius:50%; width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:15px; box-shadow:0 2px 8px rgba(0,0,0,0.45);">${emoji}</div>`,
         iconSize: [30, 30],
         iconAnchor: [15, 15]
     });
 
-    const popupHtml = `
-        <div style="font-family:sans-serif; min-width:195px; font-size:13px; line-height:1.5;">
-            <b style="color:#1565c0; font-size:14px;">🚶 ${yatri.full_name || 'यात्री'}</b><br>
-            <span style="display:inline-block; background:#fff3e0; color:#d84315; padding:1px 6px; border-radius:4px; font-size:11.5px; font-weight:bold; margin:2px 0;">🚩 ${yatraLabel}</span><br>
-            <span><b>📞 मोबाइल:</b> <a href="tel:${yatri.mobile}">${yatri.mobile || 'N/A'}</a></span><br>
-            <span><b>🕒 अंतिम लोकेशन:</b> ${seenTime}</span><br>
-            <div style="margin-top:6px; display:flex; gap:6px;">
-                <a href="tel:${yatri.mobile}" style="flex:1; text-align:center; background:#2e7d32; color:#fff; padding:4px 6px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📞 कॉल</a>
-                <a href="https://www.google.com/maps?q=${yatri.live_lat},${yatri.live_lng}" target="_blank" style="flex:1; text-align:center; background:#1565c0; color:#fff; padding:4px 6px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📍 मैप</a>
+    const popupHtml = isGuest
+        ? `
+            <div style="font-family:sans-serif; min-width:190px; font-size:13px; line-height:1.5;">
+                <b style="color:#e65100; font-size:14px;">🧭 Guest यात्री (Unregistered)</b><br>
+                <span style="display:inline-block; background:#fff3e0; color:#d84315; padding:1px 6px; border-radius:4px; font-size:11.5px; font-weight:bold; margin:2px 0;">🚩 ${yatraLabel}</span><br>
+                <span><b>🕒 अंतिम लोकेशन:</b> ${seenTime}</span><br>
+                <div style="margin-top:6px;">
+                    <a href="https://www.google.com/maps?q=${yatri.live_lat},${yatri.live_lng}" target="_blank" style="display:block; text-align:center; background:#e65100; color:#fff; padding:4px 6px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📍 मैप पर देखें</a>
+                </div>
             </div>
-        </div>
-    `;
+        `
+        : `
+            <div style="font-family:sans-serif; min-width:195px; font-size:13px; line-height:1.5;">
+                <b style="color:#1565c0; font-size:14px;">🚶 ${yatri.full_name || 'यात्री'}</b><br>
+                <span style="display:inline-block; background:#fff3e0; color:#d84315; padding:1px 6px; border-radius:4px; font-size:11.5px; font-weight:bold; margin:2px 0;">🚩 ${yatraLabel}</span><br>
+                <span><b>📞 मोबाइल:</b> <a href="tel:${yatri.mobile}">${yatri.mobile || 'N/A'}</a></span><br>
+                <span><b>🕒 अंतिम लोकेशन:</b> ${seenTime}</span><br>
+                <div style="margin-top:6px; display:flex; gap:6px;">
+                    <a href="tel:${yatri.mobile}" style="flex:1; text-align:center; background:#2e7d32; color:#fff; padding:4px 6px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📞 कॉल</a>
+                    <a href="https://www.google.com/maps?q=${yatri.live_lat},${yatri.live_lng}" target="_blank" style="flex:1; text-align:center; background:#1565c0; color:#fff; padding:4px 6px; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📍 मैप</a>
+                </div>
+            </div>
+        `;
 
-    if (liveYatriMarkers[yatri.id]) {
-        liveYatriMarkers[yatri.id].setLatLng([yatri.live_lat, yatri.live_lng]);
-        liveYatriMarkers[yatri.id].setPopupContent(popupHtml);
+    if (liveYatriMarkers[markerKey]) {
+        liveYatriMarkers[markerKey].setLatLng([yatri.live_lat, yatri.live_lng]);
+        liveYatriMarkers[markerKey].setPopupContent(popupHtml);
+        if (adminLiveLayer && !adminLiveLayer.hasLayer(liveYatriMarkers[markerKey])) {
+            liveYatriMarkers[markerKey].addTo(adminLiveLayer);
+        }
     } else {
         const marker = L.marker([yatri.live_lat, yatri.live_lng], { icon }).bindPopup(popupHtml);
         marker.addTo(adminLiveLayer);
-        liveYatriMarkers[yatri.id] = marker;
+        liveYatriMarkers[markerKey] = marker;
     }
 
     const btn = document.getElementById('adminLiveYatriBtn');
@@ -170,33 +194,62 @@ async function loadAndRenderActiveYatris() {
 
     await ensureYatrasNameMap();
 
+    if (adminLiveLayer) {
+        adminLiveLayer.clearLayers();
+    }
+    liveYatriMarkers = {};
+
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await supabaseClient
+
+    const { data: regData } = await supabaseClient
         .from('profiles')
         .select('id, full_name, mobile, role, active_yatra_id, live_lat, live_lng, last_seen_at')
         .not('live_lat', 'is', null)
         .gte('last_seen_at', twoHoursAgo);
 
-    if (error || !Array.isArray(data)) return;
-
-    const btn = document.getElementById('adminLiveYatriBtn');
-    if (btn) {
-        btn.innerText = `👥 लाइव यात्री (${data.length})`;
+    if (Array.isArray(regData)) {
+        regData.forEach(u => plotSingleYatriMarker(u, false));
     }
 
-    data.forEach(plotSingleYatriMarker);
+    const { data: guestData } = await supabaseClient
+        .from('live_visitors')
+        .select('visitor_id, yatra_id, live_lat, live_lng, last_seen_at')
+        .gte('last_seen_at', twoHoursAgo);
+
+    if (Array.isArray(guestData)) {
+        guestData.forEach(g => plotSingleYatriMarker(g, true));
+    }
+
+    const btn = document.getElementById('adminLiveYatriBtn');
+    if (btn && isAdminLiveVisible) {
+        btn.innerText = `👥 लाइव यात्री (${Object.keys(liveYatriMarkers).length})`;
+    }
 }
 
 function subscribeAdminLiveYatris() {
-    if (!isStrictAdmin() || adminLiveRealtime) return;
+    if (!isStrictAdmin()) return;
 
-    adminLiveRealtime = supabaseClient
-        .channel('public:profiles_live_yatris')
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, async (payload) => {
-            if (isStrictAdmin() && isAdminLiveVisible && payload && payload.new && payload.new.live_lat) {
-                await ensureYatrasNameMap();
-                plotSingleYatriMarker(payload.new);
-            }
-        })
-        .subscribe();
+    if (!adminLiveRealtime) {
+        adminLiveRealtime = supabaseClient
+            .channel('public:profiles_live_yatris')
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, async (payload) => {
+                if (isStrictAdmin() && isAdminLiveVisible && payload && payload.new && payload.new.live_lat) {
+                    await ensureYatrasNameMap();
+                    plotSingleYatriMarker(payload.new, false);
+                }
+            })
+            .subscribe();
+    }
+
+    if (!adminGuestRealtime) {
+        adminGuestRealtime = supabaseClient
+            .channel('public:live_visitors_live_yatris')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'live_visitors' }, async (payload) => {
+                if (isStrictAdmin() && isAdminLiveVisible && payload && payload.new && payload.new.live_lat) {
+                    await ensureYatrasNameMap();
+                    plotSingleYatriMarker(payload.new, true);
+                }
+            })
+            .subscribe();
+    }
 }
