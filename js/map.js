@@ -608,20 +608,19 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
     const manualList = Array.isArray(rawNext) ? rawNext : [];
 
     if (isNarmadaParikrama) {
-        // 1. User/Admin dwara manually jode gaye agale padav ko check karein (Dakshin -> Pashchim, Uttar -> Purab)
+        // 1. Agar padav me agala padav manually add kiya gaya hai to rasta ghumavdar hone par bhi seedhe wahi dikhayein
         const sameTatManual = manualList.filter(np => {
             if (window.abandonedBranchIds.has(np.id)) return false;
             const targetObj = (window.activeYatraPadavs || []).find(item => String(item.id) === String(np.id));
             if (!targetObj) return false;
-            if (!isSameNarmadaTat(p, targetObj)) return false;
-            return isCorrectNarmadaDirection(p, targetObj);
+            return isSameNarmadaTat(p, targetObj);
         });
 
         if (sameTatManual.length > 0) {
             return { list: sameTatManual, isAuto: false };
         }
 
-        // 2. Agar manual next_padavs nahi hai to auto-suggest mein disha (Dakshin -> Pashchim, Uttar -> Purab) check karein
+        // 2. Agar manual next_padavs nahi hai tabhi auto-suggest mein disha (Dakshin -> Pashchim, Uttar -> Purab) check karein
         const sameTatCandidates = (window.activeYatraPadavs || [])
             .filter(other => {
                 if (String(other.id) === String(p.id)) return false;
@@ -1402,7 +1401,7 @@ async function drawAutoPadavConnectingLines(visibleList) {
             const targetP = window.activeYatraPadavs.find(item => String(item.id) === String(np.id));
             if (!targetP || !targetP.lat || !targetP.lng) return null;
             if (isNarmadaParikrama && !isSameNarmadaTat(currentOriginPadav, targetP)) return null;
-            if (isNarmadaParikrama && !isCorrectNarmadaDirection(currentOriginPadav, targetP)) return null;
+            if (isNarmadaParikrama && synced.isAuto && !isCorrectNarmadaDirection(currentOriginPadav, targetP)) return null;
             return { np, targetP, idx };
         })
         .filter(Boolean);
