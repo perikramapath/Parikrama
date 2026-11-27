@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & CUSTOM ROUTE DISTANCE
+// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & HYBRID CUSTOM+ROAD DISTANCE
 // =========================================================
 
 window.map = null;
@@ -457,7 +457,8 @@ window.searchQuickAddPadavLocation = async function() {
 };
 
 // =========================================================
-// CUSTOM ROUTE & REAL ROAD KM CALCULATOR (CUSTOM ROUTE FIRST)
+// BIDIRECTIONAL CUSTOM ROUTE + HYBRID ROAD CONNECTOR
+// (A->B aur B->A dono dishaon me + Custom line ke end se aage Road connect)
 // =========================================================
 function getAllCustomRoutePolylines() {
     const routes = window.activeCustomRoutes || [];
@@ -497,19 +498,17 @@ function measurePolylineSegmentMeters(coords, idxA, idxB) {
     return total;
 }
 
-function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
-    const km = getCustomRouteKmBetween(lat1, lng1, lat2, lng2);
-    return km !== null && km > 0;
-}
-
-function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
+// Check karein ki start (lat1,lng1) se end (lat2,lng2) tak:
+// Mode 'full': dono padav custom route par hain (A->B ya B->A)
+// Mode 'partial': ek padav custom route par hai aur dusra custom route ke kisi chhor (endpoint) se aage road par hai
+function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
     const polylines = getAllCustomRoutePolylines();
     if (polylines.length === 0) return null;
 
     const snapToleranceMeters = 850;
-    let bestTotalMeters = Infinity;
+    let bestFullMeters = Infinity;
 
-    // 1. Single custom route mein dono padav mil jayein
+    // 1. Single custom route mein dono padav (A->B aur B->A dono dishaon me)
     for (const { coords } of polylines) {
         const nearStart = getNearestPointOnPolyline(lat1, lng1, coords);
         const nearEnd = getNearestPointOnPolyline(lat2, lng2, coords);
@@ -517,17 +516,20 @@ function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
         if (nearStart.distMeters <= snapToleranceMeters && nearEnd.distMeters <= snapToleranceMeters) {
             const segMeters = measurePolylineSegmentMeters(coords, nearStart.index, nearEnd.index);
             const totalMeters = segMeters + (nearStart.distMeters > 40 ? nearStart.distMeters : 0) + (nearEnd.distMeters > 40 ? nearEnd.distMeters : 0);
-            if (totalMeters > 10 && totalMeters < bestTotalMeters) {
-                bestTotalMeters = totalMeters;
+            if (totalMeters > 10 && totalMeters < bestFullMeters) {
+                bestFullMeters = totalMeters;
             }
         }
     }
 
-    if (bestTotalMeters < Infinity) {
-        return parseFloat((bestTotalMeters / 1000).toFixed(1));
+    if (bestFullMeters < Infinity) {
+        return {
+            mode: 'full',
+            customKm: parseFloat((bestFullMeters / 1000).toFixed(1))
+        };
     }
 
-    // 2. Do jude hue (chained) custom route segments ke beech agar padav hain
+    // 2. Do jude hue (chained) custom route segments (A->B aur B->A dono me)
     for (let i = 0; i < polylines.length; i++) {
         const rA = polylines[i].coords;
         const startOnA = getNearestPointOnPolyline(lat1, lng1, rA);
@@ -557,18 +559,105 @@ function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
                 const distA = measurePolylineSegmentMeters(rA, startOnA.index, jIdxA);
                 const distB = measurePolylineSegmentMeters(rB, jIdxB, endOnB.index);
                 const combined = distA + distB + bestJunctionDist + (startOnA.distMeters > 40 ? startOnA.distMeters : 0) + (endOnB.distMeters > 40 ? endOnB.distMeters : 0);
-                if (combined > 10 && combined < bestTotalMeters) {
-                    bestTotalMeters = combined;
+                if (combined > 10 && combined < bestFullMeters) {
+                    bestFullMeters = combined;
                 }
             }
         }
     }
 
-    if (bestTotalMeters < Infinity) {
-        return parseFloat((bestTotalMeters / 1000).toFixed(1));
+    if (bestFullMeters < Infinity) {
+        return {
+            mode: 'full',
+            customKm: parseFloat((bestFullMeters / 1000).toFixed(1))
+        };
     }
 
-    return null;
+    // 3. PARTIAL HYBRID: Start padav custom route par hai aur custom route jahan road par khatam hota hai,
+    // wahan se aage target padav road par hai (A->B) YA Start road par hai aur Target custom route par (return B->A)
+    let bestPartial = null;
+    let bestHeuristicMeters = Infinity;
+    const directSpanMeters = getDistanceInMeters(lat1, lng1, lat2, lng2);
+
+    for (const { coords } of polylines) {
+        const nearStart = getNearestPointOnPolyline(lat1, lng1, coords);
+        const nearEnd = getNearestPointOnPolyline(lat2, lng2, coords);
+
+        // Case 3A: Start custom route par hai -> custom route ke us end point tak jayein jo Target ke zyada paas hai, phir aage road
+        if (nearStart.distMeters <= snapToleranceMeters && nearEnd.distMeters > snapToleranceMeters) {
+            const firstPt = coords[0];
+            const lastPt = coords[coords.length - 1];
+            const distFirstToTarget = getDistanceInMeters(firstPt[0], firstPt[1], lat2, lng2);
+            const distLastToTarget = getDistanceInMeters(lastPt[0], lastPt[1], lat2, lng2);
+
+            const exitIdx = distLastToTarget <= distFirstToTarget ? (coords.length - 1) : 0;
+            const exitPt = coords[exitIdx];
+            const remToTarget = Math.min(distFirstToTarget, distLastToTarget);
+            const customSegMeters = measurePolylineSegmentMeters(coords, nearStart.index, exitIdx) + (nearStart.distMeters > 40 ? nearStart.distMeters : 0);
+
+            if (customSegMeters > 30 && remToTarget < (directSpanMeters * 1.15)) {
+                const heuristic = customSegMeters + remToTarget;
+                if (heuristic < bestHeuristicMeters) {
+                    bestHeuristicMeters = heuristic;
+                    bestPartial = {
+                        mode: 'partial_from_start',
+                        customKm: parseFloat((customSegMeters / 1000).toFixed(1)),
+                        roadFrom: exitPt,
+                        roadTo: [lat2, lng2]
+                    };
+                }
+            }
+        }
+
+        // Case 3B (Return B->A): Start road par hai -> custom route ke entry point tak road se aayein, phir custom route se Target tak
+        if (nearEnd.distMeters <= snapToleranceMeters && nearStart.distMeters > snapToleranceMeters) {
+            const firstPt = coords[0];
+            const lastPt = coords[coords.length - 1];
+            const distStartToFirst = getDistanceInMeters(lat1, lng1, firstPt[0], firstPt[1]);
+            const distStartToLast = getDistanceInMeters(lat1, lng1, lastPt[0], lastPt[1]);
+
+            const entryIdx = distStartToFirst <= distStartToLast ? 0 : (coords.length - 1);
+            const entryPt = coords[entryIdx];
+            const approachFromStart = Math.min(distStartToFirst, distStartToLast);
+            const customSegMeters = measurePolylineSegmentMeters(coords, entryIdx, nearEnd.index) + (nearEnd.distMeters > 40 ? nearEnd.distMeters : 0);
+
+            if (customSegMeters > 30 && approachFromStart < (directSpanMeters * 1.15)) {
+                const heuristic = approachFromStart + customSegMeters;
+                if (heuristic < bestHeuristicMeters) {
+                    bestHeuristicMeters = heuristic;
+                    bestPartial = {
+                        mode: 'partial_to_end',
+                        customKm: parseFloat((customSegMeters / 1000).toFixed(1)),
+                        roadFrom: [lat1, lng1],
+                        roadTo: entryPt
+                    };
+                }
+            }
+        }
+    }
+
+    return bestPartial;
+}
+
+function hasCustomDrawnRouteBetween(lat1, lng1, lat2, lng2) {
+    const match = findCustomRouteMatch(lat1, lng1, lat2, lng2);
+    return match !== null && match.mode === 'full' && match.customKm > 0;
+}
+
+function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
+    const match = findCustomRouteMatch(lat1, lng1, lat2, lng2);
+    if (!match) return null;
+    if (match.mode === 'full') return match.customKm;
+
+    // Partial match ke liye agar OSRM road segment cached hai to Custom + Road dono jod kar dein
+    const roadKey = `seg_${match.roadFrom[0].toFixed(5)}_${match.roadFrom[1].toFixed(5)}_${match.roadTo[0].toFixed(5)}_${match.roadTo[1].toFixed(5)}`;
+    if (window.osrmDistanceCache[roadKey]) {
+        return parseFloat((match.customKm + window.osrmDistanceCache[roadKey]).toFixed(1));
+    }
+
+    // Jab tak OSRM fetch ho raha hai, customKm + straight road estimate (x1.2) dikhayein
+    const estRoadKm = (getDistanceInMeters(match.roadFrom[0], match.roadFrom[1], match.roadTo[0], match.roadTo[1]) / 1000) * 1.2;
+    return parseFloat((match.customKm + estRoadKm).toFixed(1));
 }
 
 function getRemainingCustomRouteKmFromLiveGps(uLat, uLng, targetPadav) {
@@ -579,13 +668,23 @@ function getRemainingCustomRouteKmFromLiveGps(uLat, uLng, targetPadav) {
 function getResolvedPathKmSync(fromPadav, toPadav, savedKm, routeIdx = 0) {
     if (!fromPadav || !toPadav) return savedKm || null;
 
-    // 1. Sabse pehle Custom Route ki duri check karein (Hamesha highest priority)
-    const customKm = getCustomRouteKmBetween(
-        parseFloat(fromPadav.lat), parseFloat(fromPadav.lng),
-        parseFloat(toPadav.lat), parseFloat(toPadav.lng)
-    );
-    if (customKm !== null && customKm > 0) {
-        return customKm;
+    const lat1 = parseFloat(fromPadav.lat);
+    const lng1 = parseFloat(fromPadav.lng);
+    const lat2 = parseFloat(toPadav.lat);
+    const lng2 = parseFloat(toPadav.lng);
+
+    // 1. Custom Route ya Hybrid (Custom + Road) duri check karein
+    const match = findCustomRouteMatch(lat1, lng1, lat2, lng2);
+    if (match) {
+        if (match.mode === 'full') return match.customKm;
+        const hybridCacheKey = `hybrid_${fromPadav.id}_${toPadav.id}`;
+        if (window.osrmDistanceCache[hybridCacheKey]) {
+            return window.osrmDistanceCache[hybridCacheKey];
+        }
+        const roadKey = `seg_${match.roadFrom[0].toFixed(5)}_${match.roadFrom[1].toFixed(5)}_${match.roadTo[0].toFixed(5)}_${match.roadTo[1].toFixed(5)}`;
+        if (window.osrmDistanceCache[roadKey]) {
+            return parseFloat((match.customKm + window.osrmDistanceCache[roadKey]).toFixed(1));
+        }
     }
 
     // 2. OSRM cached distance
@@ -602,19 +701,64 @@ function getResolvedPathKmSync(fromPadav, toPadav, savedKm, routeIdx = 0) {
     return null;
 }
 
+async function fetchOsrmSegmentDistanceAndGeom(ptA, ptB) {
+    const segKey = `seg_${ptA[0].toFixed(5)}_${ptA[1].toFixed(5)}_${ptB[0].toFixed(5)}_${ptB[1].toFixed(5)}`;
+    if (window.osrmDistanceCache[segKey] && window.osrmGeometryCache[segKey]) {
+        return {
+            km: window.osrmDistanceCache[segKey],
+            latLngs: window.osrmGeometryCache[segKey]
+        };
+    }
+
+    if (!navigator.onLine) return null;
+
+    try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${ptA[1]},${ptA[0]};${ptB[1]},${ptB[0]}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+            const km = parseFloat((data.routes[0].distance / 1000).toFixed(1));
+            const latLngs = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+            window.osrmDistanceCache[segKey] = km;
+            window.osrmGeometryCache[segKey] = latLngs;
+            return { km, latLngs };
+        }
+    } catch (e) {}
+
+    return null;
+}
+
 async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
     if (!fromPadav || !toPadav) return null;
 
     const spanEl = document.getElementById(`km_badge_${fromPadav.id}_${toPadav.id}_${routeIdx}`);
+    const lat1 = parseFloat(fromPadav.lat);
+    const lng1 = parseFloat(fromPadav.lng);
+    const lat2 = parseFloat(toPadav.lat);
+    const lng2 = parseFloat(toPadav.lng);
 
-    // Agar custom route bana hai to hamesha wahi dikhayein
-    const customKm = getCustomRouteKmBetween(
-        parseFloat(fromPadav.lat), parseFloat(fromPadav.lng),
-        parseFloat(toPadav.lat), parseFloat(toPadav.lng)
-    );
-    if (customKm !== null && customKm > 0) {
-        if (spanEl) spanEl.innerText = `${customKm} km`;
-        return customKm;
+    // 1. Custom Route ya Hybrid (Custom + Road) check karein
+    const match = findCustomRouteMatch(lat1, lng1, lat2, lng2);
+    if (match) {
+        if (match.mode === 'full') {
+            if (spanEl) spanEl.innerText = `${match.customKm} km`;
+            return match.customKm;
+        }
+
+        // Partial custom route: jahan custom line khatam hui wahan se aage road connect karein
+        const hybridCacheKey = `hybrid_${fromPadav.id}_${toPadav.id}`;
+        const segRes = await fetchOsrmSegmentDistanceAndGeom(match.roadFrom, match.roadTo);
+        if (segRes) {
+            const totalHybridKm = parseFloat((match.customKm + segRes.km).toFixed(1));
+            window.osrmDistanceCache[hybridCacheKey] = totalHybridKm;
+            window.osrmGeometryCache[hybridCacheKey] = segRes.latLngs;
+            if (spanEl) spanEl.innerText = `${totalHybridKm} km`;
+            return totalHybridKm;
+        } else {
+            const fallbackEst = getCustomRouteKmBetween(lat1, lng1, lat2, lng2);
+            if (fallbackEst && spanEl) spanEl.innerText = `${fallbackEst} km`;
+            return fallbackEst;
+        }
     }
 
     const cacheKey = `${fromPadav.id}_${toPadav.id}_${routeIdx}`;
@@ -626,7 +770,7 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
     if (!navigator.onLine) return null;
 
     try {
-        const url = `https://router.project-osrm.org/route/v1/driving/${fromPadav.lng},${fromPadav.lat};${toPadav.lng},${toPadav.lat}?overview=full&geometries=geojson&alternatives=true`;
+        const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&alternatives=true`;
         const res = await fetch(url);
         const data = await res.json();
 
@@ -741,13 +885,13 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
                 return isCorrectNarmadaDirection(p, other);
             })
             .map(other => {
-                const customKm = getCustomRouteKmBetween(
+                const customMatch = findCustomRouteMatch(
                     parseFloat(p.lat), parseFloat(p.lng),
                     parseFloat(other.lat), parseFloat(other.lng)
                 );
-                const knownKm = customKm !== null ? customKm : getResolvedPathKmSync(p, other, null, 0);
-                // Jis padav tak custom route bana hai use sabse upar rakhein
-                const priorityBonus = (customKm !== null && customKm > 0) ? -50000 : 0;
+                const knownKm = customMatch ? getCustomRouteKmBetween(parseFloat(p.lat), parseFloat(p.lng), parseFloat(other.lat), parseFloat(other.lng)) : getResolvedPathKmSync(p, other, null, 0);
+                // Jis padav tak custom route (ya hybrid custom+road) bana hai use sabse upar rakhein
+                const priorityBonus = customMatch ? (customMatch.mode === 'full' ? -50000 : -30000) : 0;
                 const sortOrderMetric = (knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng)) + priorityBonus;
                 return {
                     id: other.id,
@@ -1549,13 +1693,12 @@ async function drawAutoPadavConnectingLines(visibleList) {
             liveRemainingKm = getResolvedPathKmSync(currentOriginPadav, targetP, np.km, idx);
         }
 
-        hudEntries.push({ target: targetP, liveKm: liveRemainingKm });
-
-        const customPairKm = getCustomRouteKmBetween(
+        const customMatch = findCustomRouteMatch(
             parseFloat(currentOriginPadav.lat), parseFloat(currentOriginPadav.lng),
             parseFloat(targetP.lat), parseFloat(targetP.lng)
         );
-        const hasCustomLine = customPairKm !== null && customPairKm > 0;
+        const hasFullCustomLine = customMatch && customMatch.mode === 'full';
+        const isHybridCustomRoad = customMatch && (customMatch.mode === 'partial_from_start' || customMatch.mode === 'partial_to_end');
 
         const buildTooltip = (kmValue) => {
             const kmText = kmValue ? ` • <b>${kmValue} km शेष</b>` : '';
@@ -1570,14 +1713,30 @@ async function drawAutoPadavConnectingLines(visibleList) {
             dashArray: '8, 8'
         };
 
-        // Agar Custom Route bana hai to OSRM ke bajay seedhe Custom Route ki duri dikhayein
-        if (hasCustomLine) {
-            const hudBadge = document.getElementById(`hud_live_km_${targetP.id}`);
-            if (hudBadge) {
-                hudBadge.innerHTML = `<b>${liveRemainingKm || customPairKm} km</b>`;
-            }
+        // 1. Poora Custom Route (A->B ya B->A) bana hai
+        if (hasFullCustomLine) {
+            const finalKm = liveRemainingKm || customMatch.customKm;
+            hudEntries.push({ target: targetP, liveKm: finalKm });
             continue;
         }
+
+        // 2. Hybrid Route: Custom route ke end se aage road connect karein
+        if (isHybridCustomRoad) {
+            const segRes = await fetchOsrmSegmentDistanceAndGeom(customMatch.roadFrom, customMatch.roadTo);
+            const totalHybridKm = segRes
+                ? parseFloat((customMatch.customKm + segRes.km).toFixed(1))
+                : (liveRemainingKm || getCustomRouteKmBetween(parseFloat(currentOriginPadav.lat), parseFloat(currentOriginPadav.lng), parseFloat(targetP.lat), parseFloat(targetP.lng)));
+
+            const roadDrawCoords = segRes ? segRes.latLngs : [customMatch.roadFrom, customMatch.roadTo];
+            L.polyline(roadDrawCoords, dottedStyle)
+                .bindPopup(buildTooltip(totalHybridKm))
+                .addTo(window.autoPadavLinkLayer);
+
+            hudEntries.push({ target: targetP, liveKm: totalHybridKm });
+            continue;
+        }
+
+        hudEntries.push({ target: targetP, liveKm: liveRemainingKm });
 
         if (hasLiveGps && navigator.onLine) {
             const liveCacheKey = `live_${targetP.id}`;
