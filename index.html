@@ -123,54 +123,132 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
 
     <style>
+        /* Keyframe Animations for Spiritual Calm & Smooth Motion */
+        @keyframes fadeSlideUp {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes floatOm {
+            0%, 100% { transform: translateY(0px) rotate(0deg); }
+            50% { transform: translateY(-7px) rotate(3deg); }
+        }
+        @keyframes shimmerSweep {
+            0% { transform: translateX(-120%) skewX(-20deg); }
+            100% { transform: translateX(260%) skewX(-20deg); }
+        }
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(46, 125, 50, 0.45); }
+            50% { box-shadow: 0 0 0 6px rgba(46, 125, 50, 0); }
+        }
+
+        html { scroll-behavior: smooth; }
+
+        .gate-box {
+            animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+            box-shadow: 0 14px 38px rgba(191, 54, 12, 0.14);
+        }
+
         /* Creative Hero & Home Enhancements */
         .hero-header-card {
-            background: linear-gradient(135deg, #bf360c 0%, #e65100 55%, #ff8f00 100%);
+            background: linear-gradient(135deg, #b71c1c 0%, #d84315 45%, #ef6c00 80%, #ff8f00 100%);
             color: #ffffff;
-            padding: 18px;
-            border-radius: 14px;
-            box-shadow: 0 8px 22px rgba(216, 67, 21, 0.28);
-            margin-bottom: 14px;
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 10px 26px rgba(216, 67, 21, 0.32);
+            margin-bottom: 16px;
             position: relative;
             overflow: hidden;
+        }
+        .hero-header-card::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0;
+            width: 45%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+            animation: shimmerSweep 6s infinite ease-in-out;
+            pointer-events: none;
         }
         .hero-header-card::after {
             content: "🕉️";
             position: absolute;
-            right: -8px;
-            bottom: -18px;
-            font-size: 95px;
-            opacity: 0.12;
+            right: 4px;
+            bottom: -14px;
+            font-size: 98px;
+            opacity: 0.14;
             pointer-events: none;
+            animation: floatOm 5s ease-in-out infinite;
         }
         .feature-strip {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
-            margin-top: 14px;
+            gap: 9px;
+            margin-top: 15px;
+            position: relative;
+            z-index: 1;
         }
         .feature-chip {
             background: rgba(255, 255, 255, 0.16);
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255, 255, 255, 0.28);
-            border-radius: 10px;
-            padding: 7px 5px;
+            backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.32);
+            border-radius: 11px;
+            padding: 8px 6px;
             text-align: center;
             font-size: 11px;
             font-weight: 600;
-            line-height: 1.35;
+            line-height: 1.38;
+            transition: transform 0.22s ease, background 0.22s ease;
         }
+        .feature-chip:hover {
+            transform: translateY(-3px);
+            background: rgba(255, 255, 255, 0.26);
+        }
+
+        /* Enhanced Yatra Cards & Search Input */
+        #yatraSearchInput {
+            transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease;
+        }
+        #yatraSearchInput:focus {
+            border-color: #d84315;
+            box-shadow: 0 0 0 4px rgba(255, 152, 0, 0.22);
+            transform: translateY(-1px);
+        }
+        .yatra-card {
+            transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.24s ease;
+            animation: fadeSlideUp 0.45s ease both;
+        }
+        .yatra-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 24px rgba(216, 67, 21, 0.16);
+        }
+
+        .sync-live-pill {
+            font-size: 11px;
+            color: #1b5e20;
+            font-weight: bold;
+            background: #e8f5e9;
+            border: 1px solid #a5d6a7;
+            padding: 3px 9px;
+            border-radius: 12px;
+            animation: pulseGlow 2.6s infinite;
+        }
+
+        /* Animated Accordion FAQ */
         .faq-item {
             background: #ffffff;
             border: 1px solid #ffe0b2;
-            border-radius: 8px;
-            padding: 10px 12px;
-            margin-bottom: 8px;
-            transition: box-shadow 0.2s;
+            border-radius: 10px;
+            padding: 11px 14px;
+            margin-bottom: 9px;
+            transition: all 0.25s ease;
+        }
+        .faq-item:hover {
+            border-color: #ffb74d;
+            transform: translateX(2px);
         }
         .faq-item[open] {
-            background: #fffdf9;
-            box-shadow: 0 3px 10px rgba(255, 152, 0, 0.12);
+            background: linear-gradient(135deg, #fffdf9, #fff8e1);
+            border-color: #ff9800;
+            box-shadow: 0 4px 14px rgba(255, 152, 0, 0.14);
         }
         .faq-item summary {
             font-weight: bold;
@@ -178,30 +256,157 @@
             cursor: pointer;
             font-size: 13px;
             list-style: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .faq-item summary::-webkit-details-marker { display: none; }
+        .faq-item summary::after {
+            content: "+";
+            font-size: 16px;
+            font-weight: bold;
+            color: #ef6c00;
+            background: #fff3e0;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: transform 0.25s ease, background 0.25s ease;
+        }
+        .faq-item[open] summary::after {
+            content: "×";
+            transform: rotate(90deg);
+            background: #d84315;
+            color: #ffffff;
         }
         .faq-item p {
-            margin: 8px 0 2px 0;
+            margin: 9px 0 2px 0;
             color: #444;
             font-size: 12.5px;
+            line-height: 1.65;
+            animation: fadeSlideUp 0.25s ease both;
+        }
+
+        /* Rich Spiritual Footer Styling */
+        .site-rich-footer {
+            background: linear-gradient(160deg, #3e1709 0%, #5d210b 50%, #7f2d0e 100%);
+            color: #fff3e0;
+            border-radius: 16px;
+            padding: 20px 18px 14px 18px;
+            margin-top: 22px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 10px 28px rgba(62, 23, 9, 0.26);
+            border-top: 4px solid #ffb300;
+        }
+        .site-rich-footer::before {
+            content: "ॐ नर्मदे हर • जय गिरनारी • राधे राधे";
+            display: block;
+            text-align: center;
+            font-size: 11px;
+            letter-spacing: 1px;
+            color: #ffe082;
+            background: rgba(0, 0, 0, 0.22);
+            padding: 5px 10px;
+            border-radius: 20px;
+            margin: 0 auto 14px auto;
+            width: fit-content;
+            border: 1px solid rgba(255, 224, 130, 0.25);
+        }
+        .footer-grid {
+            display: grid;
+            grid-template-columns: 1.3fr 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 14px;
+        }
+        .footer-col h4 {
+            color: #ffca28;
+            font-size: 13.5px;
+            margin: 0 0 8px 0;
+            border-bottom: 1px dashed rgba(255, 202, 40, 0.35);
+            padding-bottom: 4px;
+        }
+        .footer-col p {
+            font-size: 12px;
+            color: #ffe0b2;
             line-height: 1.6;
+            margin: 0;
+        }
+        .footer-links-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
         }
         .guide-pill-link {
             display: inline-flex;
             align-items: center;
-            gap: 5px;
-            background: #ffffff;
-            color: #d84315;
-            border: 1px solid #ffb74d;
-            padding: 6px 12px;
-            border-radius: 20px;
+            gap: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            border: 1px solid rgba(255, 202, 40, 0.35);
+            padding: 6px 11px;
+            border-radius: 8px;
             text-decoration: none;
-            font-weight: bold;
+            font-weight: 600;
             font-size: 12px;
-            transition: all 0.15s;
+            transition: all 0.2s ease;
         }
         .guide-pill-link:hover {
-            background: #d84315;
-            color: #ffffff;
+            background: #ff8f00;
+            color: #212121;
+            border-color: #ffca28;
+            transform: translateX(4px);
+        }
+        .footer-action-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff3e0;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .footer-action-btn:hover {
+            background: rgba(255, 202, 40, 0.22);
+            border-color: #ffca28;
+            transform: translateX(4px);
+        }
+        .footer-bottom-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            border-top: 1px solid rgba(255, 224, 178, 0.2);
+            padding-top: 10px;
+            font-size: 11.5px;
+            color: #ffcc80;
+        }
+        .scroll-top-btn {
+            background: #ffca28;
+            color: #3e1709;
+            border: none;
+            padding: 5px 11px;
+            border-radius: 16px;
+            font-size: 11.5px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+        .scroll-top-btn:hover {
+            transform: translateY(-2px);
+            background: #ffe082;
+        }
+
+        @media (max-width: 640px) {
+            .footer-grid { grid-template-columns: 1fr; gap: 14px; }
         }
         @media (max-width: 520px) {
             .feature-strip { grid-template-columns: repeat(2, 1fr); }
@@ -218,7 +423,7 @@
 
         <!-- ATTRACTIVE SAFFRON-GOLD HERO HEADER -->
         <header class="hero-header-card">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px; position:relative; z-index:1;">
                 <div style="text-align:left;">
                     <span style="background:rgba(255,255,255,0.22); padding:2px 9px; border-radius:12px; font-size:11px; font-weight:bold; letter-spacing:0.3px;">
                         🚩 निःशुल्क डिजिटल तीर्थ मार्गदर्शिका (100% Offline Support)
@@ -263,7 +468,7 @@
         <section aria-label="यात्रा चयन">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <h2 style="margin:0; font-size:16px; color:#222;">🗺️ अपनी पवित्र परिक्रमा / तीर्थ यात्रा चुनें</h2>
-                <span style="font-size:11px; color:#2e7d32; font-weight:bold; background:#e8f5e9; padding:3px 8px; border-radius:10px;">● Auto Offline Sync</span>
+                <span class="sync-live-pill">● Auto Offline Sync</span>
             </div>
 
             <input type="text" id="yatraSearchInput" onkeyup="filterYatraCards()" placeholder="🔍 यात्रा या राज्य का नाम लिखकर खोजें (जैसे: नर्मदा, गिरनार, ब्रज)..." class="search-input">
@@ -341,7 +546,7 @@
             <div id="diaryBlogViewContainer" style="display:none; margin-top:12px;"></div>
         </div>
 
-        <!-- SEO OPTIMIZED CONTENT, ACCORDION FAQ & INTERNAL GUIDE LINKS -->
+        <!-- SEO OPTIMIZED CONTENT, ACCORDION FAQ & RICH SPIRITUAL FOOTER -->
         <section aria-label="परिक्रमापथ जानकारी एवं प्रश्नोत्तर" style="margin-top:24px; padding-top:18px; border-top:1px solid #eee; text-align:left; font-size:13px; color:#444; line-height:1.65;">
             <h2 style="font-size:17px; color:#d84315; margin:0 0 8px 0;">🚩 परिक्रमापथ (Parikramapath) क्या है?</h2>
             <p style="margin:0 0 14px 0;">
@@ -370,17 +575,41 @@
                 <p>लॉगिन करने के बाद <b>Profile</b> में जाकर अपना नाम, ब्लड ग्रुप, आपातकालीन संपर्क और लाइव सेल्फी सेव करें—आपका QR कोड युक्त डिजिटल परिक्रमा पास तुरंत PDF में डाउनलोड हो जाएगा।</p>
             </details>
 
-            <!-- INTERNAL SEO LINKS FOOTER -->
-            <footer style="background:linear-gradient(135deg, #fff8e1, #fff3e0); padding:14px; border-radius:10px; border:1px solid #ffe082; font-size:12px; margin-top:16px;">
-                <div style="font-weight:bold; color:#e65100; margin-bottom:8px; font-size:13px;">📖 संपूर्ण यात्रा मार्गदर्शिकाएं एवं नियम (Yatra Guides):</div>
-                <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
-                    <a href="/yatra-guide.html?slug=narmada-parikrama" class="guide-pill-link">🌊 नर्मदा परिक्रमा मार्गदर्शिका</a>
-                    <a href="/yatra-guide.html?slug=girnar-parikrama" class="guide-pill-link">⛰️ गिरनार परिक्रमा मार्गदर्शिका</a>
-                    <a href="/yatra-guide.html?slug=braj-84-kos-parikrama" class="guide-pill-link">🦚 ब्रज 84 कोस परिक्रमा</a>
+            <!-- RICH SPIRITUAL & SEO FOOTER -->
+            <footer class="site-rich-footer">
+                <div class="footer-grid">
+                    <div class="footer-col">
+                        <h4>🕉️ परिक्रमापथ (Parikramapath.in)</h4>
+                        <p>
+                            तीर्थयात्रियों की निःस्वार्थ सेवा हेतु निर्मित डिजिटल मंच — लाइव GPS मार्ग, आश्रम व सदाव्रत अन्नक्षेत्र सूची, ऑफ़लाइन यात्रा डायरी और आपातकालीन SOS सहायता।
+                        </p>
+                    </div>
+
+                    <div class="footer-col">
+                        <h4>📖 प्रमुख यात्रा मार्गदर्शिकाएं</h4>
+                        <div class="footer-links-list">
+                            <a href="/yatra-guide.html?slug=narmada-parikrama" class="guide-pill-link">🌊 नर्मदा परिक्रमा मार्गदर्शिका</a>
+                            <a href="/yatra-guide.html?slug=girnar-parikrama" class="guide-pill-link">⛰️ गिरनार परिक्रमा मार्गदर्शिका</a>
+                            <a href="/yatra-guide.html?slug=braj-84-kos-parikrama" class="guide-pill-link">🦚 ब्रज 84 कोस परिक्रमा</a>
+                        </div>
+                    </div>
+
+                    <div class="footer-col">
+                        <h4>🧭 यात्री सुविधाएं</h4>
+                        <div class="footer-links-list">
+                            <button type="button" onclick="ParikramaDiaryBlog && ParikramaDiaryBlog.openDiaryHub()" class="footer-action-btn">📓 यात्रियों की डायरी पढ़ें</button>
+                            <button type="button" onclick="openProfileModal()" class="footer-action-btn">🪪 डिजिटल ID Pass</button>
+                            <button type="button" onclick="triggerPwaInstall()" class="footer-action-btn">📲 ऑफ़लाइन ऐप इंस्टॉल करें</button>
+                        </div>
+                    </div>
                 </div>
-                <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px; color:#666; border-top:1px dashed #ffd54f; padding-top:8px;">
+
+                <div class="footer-bottom-bar">
                     <span>© 2026 <b>Parikramapath.in</b> — भारत तीर्थ एवं परिक्रमा सेवा पोर्टल</span>
-                    <span>नर्मदे हर! 🚩</span>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span>नर्मदे हर! 🚩</span>
+                        <button type="button" onclick="document.getElementById('yatraGate').scrollTo({top:0, behavior:'smooth'})" class="scroll-top-btn" title="सबसे ऊपर जाएं">↑ ऊपर जाएं</button>
+                    </div>
                 </div>
             </footer>
         </section>
