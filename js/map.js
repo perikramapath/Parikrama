@@ -282,8 +282,8 @@ function renderCustomRoutesOnMap() {
 
         L.polyline(r.coordinates, {
             color: r.color || window.activeYatra?.theme_color || '#d84315',
-            weight: 5,
-            opacity: 0.92
+            weight: 4,
+            opacity: 0.68
         }).bindPopup(popupHtml).addTo(window.routeLayer);
     });
 }
@@ -1324,12 +1324,28 @@ async function initAndLoadIsolatedMap() {
     const initialZoom = (window.yatriLiveCoords || window.selectedStartPadav) ? 13 : (window.activeYatra.default_zoom || 10);
 
     if (!window.map) {
-        window.map = L.map('map', { zoomControl: false }).setView([initialLat, initialLng], initialZoom);
+        window.map = L.map('map', { zoomControl: false, maxZoom: 19 }).setView([initialLat, initialLng], initialZoom);
         L.control.zoom({ position: 'bottomright' }).addTo(window.map);
 
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        const osmStandardLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
             attribution: '© OpenStreetMap | Parikramapath'
-        }).addTo(window.map);
+        });
+
+        const topoTrailLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            maxZoom: 17,
+            attribution: '© OpenTopoMap (पगडंडी व छोटे रास्ते) | Parikramapath'
+        });
+
+        osmStandardLayer.addTo(window.map);
+        L.control.layers(
+            {
+                '🗺️ सामान्य नक्शा (OSM)': osmStandardLayer,
+                '🥾 पगडंडी व छोटे रास्ते (Topo)': topoTrailLayer
+            },
+            null,
+            { position: 'bottomright' }
+        ).addTo(window.map);
 
         window.routeLayer.addTo(window.map);
         window.autoPadavLinkLayer.addTo(window.map);
@@ -1549,8 +1565,8 @@ async function drawAutoPadavConnectingLines(visibleList) {
 
         const dottedStyle = {
             color: lineColor,
-            weight: 5,
-            opacity: 0.92,
+            weight: 4,
+            opacity: 0.72,
             dashArray: '8, 8'
         };
 
@@ -1930,7 +1946,8 @@ function updateManualTempLine() {
     if (window.manualDrawnPoints.length > 0) {
         window.manualTempLine = L.polyline(window.manualDrawnPoints, {
             color: '#2e7d32',
-            weight: 5,
+            weight: 4,
+            opacity: 0.78,
             dashArray: '8, 6'
         }).addTo(window.map);
     }
@@ -2142,7 +2159,8 @@ function updateGpsTempLine() {
     if (window.gpsRecordedPoints.length > 0) {
         window.gpsTempLine = L.polyline(window.gpsRecordedPoints, {
             color: '#0288d1',
-            weight: 5
+            weight: 4,
+            opacity: 0.78
         }).addTo(window.map);
     }
 }
