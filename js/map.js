@@ -202,12 +202,13 @@ function injectNextPadavPickerSearch() {
 })();
 
 // ---------------------------------------------------------
-// FUNCTION GROUP 1: MANUAL POINT-TO-POINT LINE DRAWING
+// FUNCTION GROUP 1: MANUAL POINT-TO-POINT LINE DRAWING (WITH EDIT & DELETE)
 // ---------------------------------------------------------
 window.isManualDrawing = false;
 window.manualDrawnPoints = [];
 window.manualHistoryStack = [];
 window.manualTempLine = null;
+window.editingCustomRouteId = null;
 
 // ---------------------------------------------------------
 // FUNCTION GROUP 2: ALAG GPS FOLLOW RECORDER (ANTI-JUMP)
@@ -248,6 +249,115 @@ function isStrictSuperOrAdmin() {
     const r = window.currentProfile.role.toLowerCase().trim().replace(/\s+/g, '_');
     return (r === 'super_admin' || r === 'admin');
 }
+
+// =========================================================
+// RENDER ALL CUSTOM ROUTES ON MAP (WITH EDIT / DELETE POPUP FOR ADMIN)
+// =========================================================
+function renderCustomRoutesOnMap() {
+    if (!window.routeLayer) return;
+    window.routeLayer.clearLayers();
+
+    const canEditRoute = isUserAdminOrMod();
+
+    (window.activeCustomRoutes || []).forEach((r, idx) => {
+        if (!Array.isArray(r.coordinates) || r.coordinates.length < 2) return;
+        const routeKey = r.id !== undefined && r.id !== null ? String(r.id) : `idx_${idx}`;
+
+        const adminControlsHtml = canEditRoute
+            ? `
+                <div style="display:flex; gap:5px; margin-top:7px; border-top:1px dashed #ccc; padding-top:6px;">
+                    <button type="button" onclick="editCustomRouteLine('${routeKey}')" style="flex:1; background:#ffc107; color:#000; border:none; padding:5px 7px; border-radius:4px; font-size:11.5px; font-weight:bold; cursor:pointer;">✏️ Edit</button>
+                    <button type="button" onclick="deleteCustomRouteLine('${routeKey}')" style="flex:1; background:#dc3545; color:#fff; border:none; padding:5px 7px; border-radius:4px; font-size:11.5px; font-weight:bold; cursor:pointer;">🗑️ Delete</button>
+                </div>
+              `
+            : '';
+
+        const popupHtml = `
+            <div style="min-width:165px; font-family:sans-serif;">
+                <b>🛣️ ${r.route_name || 'कस्टम मार्ग'}</b><br>
+                <small style="color:#555;">${r.sub_route || ''}</small>
+                ${adminControlsHtml}
+            </div>
+        `;
+
+        L.polyline(r.coordinates, {
+            color: r.color || window.activeYatra?.theme_color || '#d84315',
+            weight: 5,
+            opacity: 0.92
+        }).bindPopup(popupHtml).addTo(window.routeLayer);
+    });
+}
+
+window.editCustomRouteLine = function(routeKey) {
+    if (!isUserAdminOrMod()) return;
+
+    const routeIdx = (window.activeCustomRoutes || []).findIndex((r, i) => {
+        const k = r.id !== undefined && r.id !== null ? String(r.id) : `idx_${i}`;
+        return k === String(routeKey);
+    });
+    if (routeIdx === -1) return;
+
+    const targetRoute = window.activeCustomRoutes[routeIdx];
+    if (!Array.isArray(targetRoute.coordinates) || targetRoute.coordinates.length === 0) return;
+
+    if (window.map) window.map.closePopup();
+    if (window.isGpsFollowActive) cancelGpsFollowRecording();
+
+    window.editingCustomRouteId = targetRoute.id !== undefined && targetRoute.id !== null ? targetRoute.id : `idx_${routeIdx}`;
+    window.isManualDrawing = true;
+    window.manualDrawnPoints = targetRoute.coordinates.map(pt =>
+        Array.isArray(pt) ? [parseFloat(pt[0]), parseFloat(pt[1])] : [parseFloat(pt.lat), parseFloat(pt.lng)]
+    );
+    window.manualHistoryStack = window.manualDrawnPoints.map(() => 1);
+
+    const hud = document.getElementById('liveYatraNavHud');
+    if (hud) hud.style.display = 'none';
+
+    const toolbar = document.getElementById('manualDrawToolbar');
+    if (toolbar) {
+        toolbar.style.display = 'block';
+        toolbar.style.cursor = 'move';
+        makeElementMovable(toolbar);
+    }
+
+    updateManualTempLine();
+    const statusEl = document.getElementById('manualDrawStatus');
+    if (statusEl) {
+        statusEl.innerHTML = `<span style="color:#1565c0; font-weight:bold;">✏️ "${targetRoute.route_name}" संपादन मोड: Undo से बिंदु हटाएं या मैप पर क्लिक कर आगे बढ़ाएं।</span>`;
+    }
+};
+
+window.deleteCustomRouteLine = async function(routeKey) {
+    if (!isUserAdminOrMod()) return;
+
+    const routeIdx = (window.activeCustomRoutes || []).findIndex((r, i) => {
+        const k = r.id !== undefined && r.id !== null ? String(r.id) : `idx_${i}`;
+        return k === String(routeKey);
+    });
+    if (routeIdx === -1) return;
+
+    const targetRoute = window.activeCustomRoutes[routeIdx];
+    if (!confirm(`⚠️ क्या आप वाकई "${targetRoute.route_name || 'इस मार्ग'}" लाइन को डिलीट करना चाहते हैं?`)) return;
+
+    if (window.map) window.map.closePopup();
+
+    if (targetRoute.id !== undefined && targetRoute.id !== null) {
+        const { error } = await supabaseClient.from('yatra_routes').delete().eq('id', targetRoute.id);
+        if (error) return alert("Route delete error: " + error.message);
+    }
+
+    window.activeCustomRoutes.splice(routeIdx, 1);
+    window.osrmDistanceCache = {};
+    window.osrmGeometryCache = {};
+
+    if (window.ParikramaOffline) {
+        window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
+    }
+
+    renderCustomRoutesOnMap();
+    applyMapFilters();
+    alert("🗑️ मार्ग लाइन हटा दी गई है।");
+};
 
 // =========================================================
 // SEARCH LOCATION FOR QUICK ADD PADAV ON MAP
@@ -1311,15 +1421,7 @@ async function initAndLoadIsolatedMap() {
     }
 
     window.activeCustomRoutes = loadedRoutes;
-    window.activeCustomRoutes.forEach(r => {
-        if (Array.isArray(r.coordinates) && r.coordinates.length > 1) {
-            L.polyline(r.coordinates, {
-                color: r.color || window.activeYatra.theme_color || '#d84315',
-                weight: 5,
-                opacity: 0.92
-            }).bindPopup(`<b>🛣️ ${r.route_name}</b><br><small>${r.sub_route || ''}</small>`).addTo(window.routeLayer);
-        }
-    });
+    renderCustomRoutesOnMap();
 
     // 2. AB PADAVS RENDER KAREIN
     window.activeYatraPadavs = loadedPadavs;
@@ -1761,6 +1863,7 @@ function applyMapFilters() {
 function startManualLineDrawing() {
     if (window.isGpsFollowActive) cancelGpsFollowRecording();
 
+    window.editingCustomRouteId = null;
     window.isManualDrawing = true;
     window.manualDrawnPoints = [];
     window.manualHistoryStack = [];
@@ -1842,6 +1945,7 @@ function undoManualDrawPoint() {
 
 function cancelManualLineDrawing() {
     window.isManualDrawing = false;
+    window.editingCustomRouteId = null;
     window.manualDrawnPoints = [];
     window.manualHistoryStack = [];
     if (window.manualTempLine) window.map.removeLayer(window.manualTempLine);
@@ -1851,12 +1955,60 @@ function cancelManualLineDrawing() {
 
 async function saveManualDrawnRoute() {
     if (window.manualDrawnPoints.length < 2) return alert("कम से कम 2 बिंदु चुनें।");
-    const routeName = prompt("इस मार्ग का नाम लिखें (जैसे: ओंकारेश्वर से मोरटक्का मार्ग):");
+
+    const isEditing = window.editingCustomRouteId !== null;
+    const existingRoute = isEditing
+        ? (window.activeCustomRoutes || []).find((r, i) => {
+            const k = r.id !== undefined && r.id !== null ? r.id : `idx_${i}`;
+            return String(k) === String(window.editingCustomRouteId);
+        })
+        : null;
+
+    const defaultName = existingRoute ? (existingRoute.route_name || '') : '';
+    const routeName = prompt("इस मार्ग का नाम लिखें (जैसे: ओंकारेश्वर से मोरटक्का मार्ग):", defaultName);
     if (!routeName) return;
 
     const subRoute = document.getElementById('subRouteFilter').value !== 'all'
         ? document.getElementById('subRouteFilter').value
-        : (window.activeYatra.sub_routes?.[0] || 'Main Route');
+        : (existingRoute?.sub_route || window.activeYatra.sub_routes?.[0] || 'Main Route');
+
+    if (isEditing && existingRoute) {
+        const updatedObj = {
+            ...existingRoute,
+            sub_route: subRoute,
+            route_name: routeName,
+            coordinates: [...window.manualDrawnPoints]
+        };
+
+        if (existingRoute.id !== undefined && existingRoute.id !== null) {
+            const { data, error } = await supabaseClient
+                .from('yatra_routes')
+                .update({
+                    sub_route: updatedObj.sub_route,
+                    route_name: updatedObj.route_name,
+                    coordinates: updatedObj.coordinates
+                })
+                .eq('id', existingRoute.id)
+                .select()
+                .single();
+            if (error) return alert("Route update error: " + error.message);
+            Object.assign(existingRoute, data || updatedObj);
+        } else {
+            Object.assign(existingRoute, updatedObj);
+        }
+
+        window.osrmDistanceCache = {};
+        window.osrmGeometryCache = {};
+
+        if (window.ParikramaOffline) {
+            window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
+        }
+
+        renderCustomRoutesOnMap();
+        cancelManualLineDrawing();
+        alert("✅ आपका कस्टम मार्ग अपडेट हो गया है!");
+        return;
+    }
 
     const newRouteObj = {
         yatra_id: window.activeYatra.id,
@@ -1879,12 +2031,7 @@ async function saveManualDrawnRoute() {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
     }
 
-    L.polyline(newRouteObj.coordinates, {
-        color: newRouteObj.color,
-        weight: 5,
-        opacity: 0.92
-    }).bindPopup(`<b>🛣️ ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
-
+    renderCustomRoutesOnMap();
     cancelManualLineDrawing();
     alert("✅ आपका कस्टम मार्ग और उसकी सटीक दूरी सेव हो गई है!");
 }
@@ -2043,12 +2190,7 @@ async function saveGpsFollowedRoute() {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
     }
 
-    L.polyline(newRouteObj.coordinates, {
-        color: '#0288d1',
-        weight: 5,
-        opacity: 0.92
-    }).bindPopup(`<b>📡 ${routeName}</b><br><small>${subRoute}</small>`).addTo(window.routeLayer);
-
+    renderCustomRoutesOnMap();
     cancelGpsFollowRecording();
     alert("✅ GPS द्वारा रिकॉर्ड किया गया मार्ग और उसकी सटीक दूरी सेव हो गई है!");
 }
