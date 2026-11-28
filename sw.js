@@ -1,4 +1,4 @@
-const CACHE_NAME = 'parikramapath-v15';
+const CACHE_NAME = 'parikramapath-v16';
 const TILE_CACHE = 'parikrama-map-tiles-v1';
 
 const APP_ASSETS = [
@@ -56,9 +56,12 @@ self.addEventListener('fetch', event => {
 
   const url = new URL(event.request.url);
 
-  // 1. OpenStreetMap Tiles: Cache-First (Offline Map Support)
-  if (url.hostname.includes('openstreetmap.org')) {
-    const normalizedReq = normalizeOsmTileRequest(url);
+  // 1. OpenStreetMap & Topo Map Tiles: Cache-First (Turant load + Offline support)
+  if (url.hostname.includes('openstreetmap.org') || url.hostname.includes('opentopomap.org')) {
+    const normalizedReq = url.hostname.includes('openstreetmap.org')
+      ? normalizeOsmTileRequest(url)
+      : event.request;
+
     event.respondWith(
       caches.open(TILE_CACHE).then(cache =>
         cache.match(normalizedReq).then(cached => {
@@ -90,24 +93,40 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 3. App HTML / JS / CSS & Leaflet CDN Files: Network-First with Offline Cache Fallback
-  event.respondWith(
-    fetch(event.request)
-      .then(networkRes => {
-        if (networkRes && networkRes.status === 200 && (url.origin === self.location.origin || url.hostname.includes('unpkg.com') || url.hostname.includes('cdnjs.cloudflare.com'))) {
-          const resClone = networkRes.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, resClone));
-        }
-        return networkRes;
-      })
-      .catch(() =>
-        caches.match(event.request, { ignoreSearch: true }).then(cached => {
-          if (cached) return cached;
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
+  // 3. App HTML / JS / CSS & CDN Libraries: Stale-While-Revalidate
+  // Pehle purane cache se 0.1 sec me turant khulega, aur background me sirf updated file refresh hogi
+  const isLocalAsset = (url.origin === self.location.origin);
+  const isTrustedCdn = url.hostname.includes('unpkg.com') ||
+                       url.hostname.includes('cdnjs.cloudflare.com') ||
+                       url.hostname.includes('cdn.jsdelivr.net');
+
+  if (isLocalAsset || isTrustedCdn) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(cache =>
+        cache.match(event.request, { ignoreSearch: isLocalAsset }).then(cachedResponse => {
+          const networkFetchPromise = fetch(event.request)
+            .then(networkRes => {
+              if (networkRes && networkRes.status === 200) {
+                cache.put(event.request, networkRes.clone());
+              }
+              return networkRes;
+            })
+            .catch(() => null);
+
+          if (cachedResponse) {
+            event.waitUntil(networkFetchPromise);
+            return cachedResponse;
           }
-          return new Response('Offline', { status: 503 });
+
+          return networkFetchPromise.then(netRes => {
+            if (netRes) return netRes;
+            if (event.request.mode === 'navigate') {
+              return cache.match('/index.html');
+            }
+            return new Response('Offline', { status: 503 });
+          });
         })
       )
-  );
+    );
+  }
 });
