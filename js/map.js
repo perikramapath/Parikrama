@@ -211,15 +211,64 @@ window.manualTempLine = null;
 window.editingCustomRouteId = null;
 
 // ---------------------------------------------------------
-// FUNCTION GROUP 2: ALAG GPS FOLLOW RECORDER (ANTI-JUMP)
+// FUNCTION GROUP 2: ALAG GPS FOLLOW RECORDER (BACKGROUND + SCREEN-OFF SAFE)
 // ---------------------------------------------------------
 window.isGpsFollowActive = false;
 window.isGpsPaused = false;
 window.gpsWatchId = null;
+window.gpsBackupInterval = null;
+window.gpsFollowWakeLock = null;
 window.gpsRecordedPoints = [];
 window.gpsTempLine = null;
 window.lastValidGpsPt = null;
 window.lastValidGpsTime = 0;
+
+const GPS_FOLLOW_STORAGE_KEY = 'parikrama_gps_follow_backup_v1';
+
+function saveGpsFollowStateLocal() {
+    try {
+        if (!window.isGpsFollowActive) {
+            localStorage.removeItem(GPS_FOLLOW_STORAGE_KEY);
+            return;
+        }
+        localStorage.setItem(GPS_FOLLOW_STORAGE_KEY, JSON.stringify({
+            active: true,
+            paused: !!window.isGpsPaused,
+            yatraId: window.activeYatra?.id || null,
+            points: window.gpsRecordedPoints || [],
+            lastPt: window.lastValidGpsPt || null,
+            lastTime: window.lastValidGpsTime || Date.now()
+        }));
+    } catch (e) {}
+}
+
+function loadGpsFollowStateLocal() {
+    try {
+        const raw = localStorage.getItem(GPS_FOLLOW_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function requestGpsFollowWakeLock() {
+    try {
+        if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+            if (!window.gpsFollowWakeLock || window.gpsFollowWakeLock.released) {
+                window.gpsFollowWakeLock = await navigator.wakeLock.request('screen');
+            }
+        }
+    } catch (e) {}
+}
+
+function releaseGpsFollowWakeLock() {
+    try {
+        if (window.gpsFollowWakeLock && !window.gpsFollowWakeLock.released) {
+            window.gpsFollowWakeLock.release();
+        }
+    } catch (e) {}
+    window.gpsFollowWakeLock = null;
+}
 
 function safeT(key, fallback) {
     try {
@@ -236,6 +285,13 @@ function getDistanceInMeters(lat1, lng1, lat2, lng2) {
               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
               Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getOfflineEstimatedPathKm(lat1, lng1, lat2, lng2) {
+    const meters = getDistanceInMeters(lat1, lng1, lat2, lng2);
+    if (isNaN(meters) || meters <= 0) return null;
+    const km = (meters / 1000) * 1.25;
+    return Math.max(0.1, parseFloat(km.toFixed(1)));
 }
 
 function isUserAdminOrMod() {
@@ -498,9 +554,6 @@ function measurePolylineSegmentMeters(coords, idxA, idxB) {
     return total;
 }
 
-// Check karein ki start (lat1,lng1) se end (lat2,lng2) tak:
-// Mode 'full': dono padav custom route par hain (A->B ya B->A)
-// Mode 'partial': ek padav custom route par hai aur dusra custom route ke kisi chhor (endpoint) se aage road par hai
 function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
     const polylines = getAllCustomRoutePolylines();
     if (polylines.length === 0) return null;
@@ -583,7 +636,6 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
         const nearStart = getNearestPointOnPolyline(lat1, lng1, coords);
         const nearEnd = getNearestPointOnPolyline(lat2, lng2, coords);
 
-        // Case 3A: Start custom route par hai -> custom route ke us end point tak jayein jo Target ke zyada paas hai, phir aage road
         if (nearStart.distMeters <= snapToleranceMeters && nearEnd.distMeters > snapToleranceMeters) {
             const firstPt = coords[0];
             const lastPt = coords[coords.length - 1];
@@ -609,7 +661,6 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
             }
         }
 
-        // Case 3B (Return B->A): Start road par hai -> custom route ke entry point tak road se aayein, phir custom route se Target tak
         if (nearEnd.distMeters <= snapToleranceMeters && nearStart.distMeters > snapToleranceMeters) {
             const firstPt = coords[0];
             const lastPt = coords[coords.length - 1];
@@ -649,20 +700,28 @@ function getCustomRouteKmBetween(lat1, lng1, lat2, lng2) {
     if (!match) return null;
     if (match.mode === 'full') return match.customKm;
 
-    // Partial match ke liye agar OSRM road segment cached hai to Custom + Road dono jod kar dein
     const roadKey = `seg_${match.roadFrom[0].toFixed(5)}_${match.roadFrom[1].toFixed(5)}_${match.roadTo[0].toFixed(5)}_${match.roadTo[1].toFixed(5)}`;
     if (window.osrmDistanceCache[roadKey]) {
         return parseFloat((match.customKm + window.osrmDistanceCache[roadKey]).toFixed(1));
     }
 
-    // Jab tak OSRM fetch ho raha hai, customKm + straight road estimate (x1.2) dikhayein
-    const estRoadKm = (getDistanceInMeters(match.roadFrom[0], match.roadFrom[1], match.roadTo[0], match.roadTo[1]) / 1000) * 1.2;
+    const estRoadKm = (getDistanceInMeters(match.roadFrom[0], match.roadFrom[1], match.roadTo[0], match.roadTo[1]) / 1000) * 1.25;
     return parseFloat((match.customKm + estRoadKm).toFixed(1));
 }
 
 function getRemainingCustomRouteKmFromLiveGps(uLat, uLng, targetPadav) {
     if (!targetPadav || !targetPadav.lat || !targetPadav.lng) return null;
-    return getCustomRouteKmBetween(uLat, uLng, parseFloat(targetPadav.lat), parseFloat(targetPadav.lng));
+    const lat2 = parseFloat(targetPadav.lat);
+    const lng2 = parseFloat(targetPadav.lng);
+    const customOrHybrid = getCustomRouteKmBetween(uLat, uLng, lat2, lng2);
+    if (customOrHybrid !== null && customOrHybrid > 0) return customOrHybrid;
+
+    const liveCacheKey = `live_${targetPadav.id}`;
+    if (window.osrmDistanceCache[liveCacheKey]) {
+        return window.osrmDistanceCache[liveCacheKey];
+    }
+
+    return getOfflineEstimatedPathKm(uLat, uLng, lat2, lng2);
 }
 
 function getResolvedPathKmSync(fromPadav, toPadav, savedKm, routeIdx = 0) {
@@ -698,7 +757,8 @@ function getResolvedPathKmSync(fromPadav, toPadav, savedKm, routeIdx = 0) {
         return parseFloat(savedKm);
     }
 
-    return null;
+    // 4. 100% Offline fallback: hamesha anumanit road/pagdandi km turant dikhayein
+    return getOfflineEstimatedPathKm(lat1, lng1, lat2, lng2);
 }
 
 async function fetchOsrmSegmentDistanceAndGeom(ptA, ptB) {
@@ -745,7 +805,6 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
             return match.customKm;
         }
 
-        // Partial custom route: jahan custom line khatam hui wahan se aage road connect karein
         const hybridCacheKey = `hybrid_${fromPadav.id}_${toPadav.id}`;
         const segRes = await fetchOsrmSegmentDistanceAndGeom(match.roadFrom, match.roadTo);
         if (segRes) {
@@ -767,7 +826,11 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
         return window.osrmDistanceCache[cacheKey];
     }
 
-    if (!navigator.onLine) return null;
+    if (!navigator.onLine) {
+        const offlineEst = getOfflineEstimatedPathKm(lat1, lng1, lat2, lng2);
+        if (offlineEst && spanEl) spanEl.innerText = `${offlineEst} km`;
+        return offlineEst;
+    }
 
     try {
         const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&alternatives=true`;
@@ -794,7 +857,9 @@ async function fetchRealRoadKmAsync(fromPadav, toPadav, routeIdx = 0) {
         }
     } catch (e) {}
 
-    return null;
+    const offlineFallback = getOfflineEstimatedPathKm(lat1, lng1, lat2, lng2);
+    if (offlineFallback && spanEl) spanEl.innerText = `${offlineFallback} km`;
+    return offlineFallback;
 }
 
 // =========================================================
@@ -843,11 +908,9 @@ function isCorrectNarmadaDirection(fromPadav, toPadav) {
     const toLng = parseFloat(toPadav.lng);
     if (isNaN(fromLng) || isNaN(toLng)) return true;
 
-    // Dakshin Tat par hamesha Pashchim (West: toLng < fromLng) ki aur agala padav hoga
     if (dir === 'dakshin') {
         return toLng < (fromLng - 0.0005);
     }
-    // Uttar Tat par hamesha Purab (East: toLng > fromLng) ki aur agala padav hoga
     if (dir === 'uttar') {
         return toLng > (fromLng + 0.0005);
     }
@@ -862,7 +925,6 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
     const manualList = Array.isArray(rawNext) ? rawNext : [];
 
     if (isNarmadaParikrama) {
-        // 1. Agar padav me agala padav manually add kiya gaya hai to rasta ghumavdar hone par bhi seedhe wahi dikhayein
         const sameTatManual = manualList.filter(np => {
             if (window.abandonedBranchIds.has(np.id)) return false;
             const targetObj = (window.activeYatraPadavs || []).find(item => String(item.id) === String(np.id));
@@ -874,7 +936,6 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
             return { list: sameTatManual, isAuto: false };
         }
 
-        // 2. Agar manual next_padavs nahi hai tabhi auto-suggest mein disha (Dakshin -> Pashchim, Uttar -> Purab) check karein
         const sameTatCandidates = (window.activeYatraPadavs || [])
             .filter(other => {
                 if (String(other.id) === String(p.id)) return false;
@@ -890,7 +951,6 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
                     parseFloat(other.lat), parseFloat(other.lng)
                 );
                 const knownKm = customMatch ? getCustomRouteKmBetween(parseFloat(p.lat), parseFloat(p.lng), parseFloat(other.lat), parseFloat(other.lng)) : getResolvedPathKmSync(p, other, null, 0);
-                // Jis padav tak custom route (ya hybrid custom+road) bana hai use sabse upar rakhein
                 const priorityBonus = customMatch ? (customMatch.mode === 'full' ? -50000 : -30000) : 0;
                 const sortOrderMetric = (knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng)) + priorityBonus;
                 return {
@@ -1001,7 +1061,7 @@ function makeElementMovable(el) {
 }
 
 // =========================================================
-// LIVE ROUTE NAVIGATION BAR (HUD) - MOVABLE & AUTO-HIDES IN DRAW MODE
+// LIVE ROUTE NAVIGATION BAR (HUD) - MOVABLE, OFFLINE READY & SHOWS FACILITIES
 // =========================================================
 function updateLiveNavigationHud(originPadav, targetEntries) {
     let hud = document.getElementById('liveYatraNavHud');
@@ -1023,18 +1083,35 @@ function updateLiveNavigationHud(originPadav, targetEntries) {
     hud.style.display = 'block';
 
     const rowsHtml = targetEntries.map((item, idx) => {
-        const kmStr = item.liveKm !== null && item.liveKm !== undefined
-            ? `<b>${item.liveKm} km</b>`
-            : '<span>मार्ग पर</span>';
+        const kmVal = (item.liveKm !== null && item.liveKm !== undefined)
+            ? item.liveKm
+            : getOfflineEstimatedPathKm(originPadav.lat, originPadav.lng, item.target.lat, item.target.lng);
+        const kmStr = kmVal ? `<b>${kmVal} km</b>` : '<span>मार्ग पर</span>';
         const prefix = targetEntries.length > 1 ? `विकल्प ${idx + 1}: ` : '➡️ अगला पड़ाव: ';
+
+        const facBadges = [];
+        if (item.target.category !== 'Point') {
+            if (item.target.bhojan_type && !item.target.bhojan_type.includes('Not')) facBadges.push('🍛 भोजन');
+            if (item.target.niwas_type && !item.target.niwas_type.includes('No Stay')) facBadges.push('🛌 निवास');
+            if (item.target.has_water) facBadges.push('🚰');
+        } else {
+            facBadges.push('📍 मार्ग बिंदु');
+        }
+        const facLine = facBadges.length > 0
+            ? `<div style="font-size:10.5px; color:#e3f2fd; margin-top:2px;">${facBadges.join(' • ')}</div>`
+            : '';
+
         return `
-            <div style="display:flex; justify-content:space-between; align-items:center; ${idx > 0 ? 'margin-top:4px; padding-top:4px; border-top:1px dashed rgba(255,255,255,0.35);' : ''}">
-                <span onclick="focusOnPadav('${item.target.id}')" style="cursor:pointer; text-decoration:underline; font-weight:bold; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px;">
-                    ${prefix}${item.target.name}
-                </span>
-                <span id="hud_live_km_${item.target.id}" style="background:#ffeb3b; color:#0d47a1; padding:2px 7px; border-radius:6px; font-size:12px; white-space:nowrap;">
-                    ${kmStr}
-                </span>
+            <div style="${idx > 0 ? 'margin-top:5px; padding-top:5px; border-top:1px dashed rgba(255,255,255,0.35);' : ''}">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span onclick="focusOnPadav('${item.target.id}')" style="cursor:pointer; text-decoration:underline; font-weight:bold; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px;">
+                        ${prefix}${item.target.name}
+                    </span>
+                    <span id="hud_live_km_${item.target.id}" style="background:#ffeb3b; color:#0d47a1; padding:2px 7px; border-radius:6px; font-size:12px; white-space:nowrap;">
+                        ${kmStr}
+                    </span>
+                </div>
+                ${facLine}
             </div>
         `;
     }).join('');
@@ -1433,6 +1510,9 @@ function triggerImmediateYatriProgressSync() {
         (pos) => {
             processYatriLiveGpsCoordinates(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
             syncYatriLiveLocationToDb(pos.coords.latitude, pos.coords.longitude, true);
+            if (window.isGpsFollowActive && !window.isGpsPaused) {
+                recordIncomingGpsFollowPoint(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, true);
+            }
         },
         () => {},
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
@@ -1453,6 +1533,10 @@ function startYatriLiveProgressTracker() {
         const onResumeSync = () => {
             if (window.map && typeof window.map.invalidateSize === 'function') {
                 setTimeout(() => window.map.invalidateSize(), 150);
+            }
+            if (window.isGpsFollowActive) {
+                requestGpsFollowWakeLock();
+                ensureGpsFollowWatcherRunning();
             }
             triggerImmediateYatriProgressSync();
         };
@@ -1625,6 +1709,9 @@ async function initAndLoadIsolatedMap() {
     if (isStrictSuperOrAdmin()) {
         loadAllActiveYatrisForAdmin();
     }
+
+    // 4. AGAR PEHLE SE CHALU GPS FOLLOW RECORDING BACKUP ME HAI TO USE TURANT RESTORE KAREIN
+    restoreActiveGpsFollowIfNeeded();
 }
 
 // =========================================================
@@ -1743,14 +1830,12 @@ async function drawAutoPadavConnectingLines(visibleList) {
             dashArray: '8, 8'
         };
 
-        // 1. Poora Custom Route (A->B ya B->A) bana hai
         if (hasFullCustomLine) {
             const finalKm = liveRemainingKm || customMatch.customKm;
             hudEntries.push({ target: targetP, liveKm: finalKm });
             continue;
         }
 
-        // 2. Hybrid Route: Custom route ke end se aage road connect karein
         if (isHybridCustomRoad) {
             const segRes = await fetchOsrmSegmentDistanceAndGeom(customMatch.roadFrom, customMatch.roadTo);
             const totalHybridKm = segRes
@@ -2229,7 +2314,6 @@ async function saveManualDrawnRoute() {
 
     window.activeCustomRoutes.push(data || newRouteObj);
 
-    // Purana OSRM distance/geometry cache clear karein taaki nayi custom route duri turant dikhe
     window.osrmDistanceCache = {};
     window.osrmGeometryCache = {};
 
@@ -2243,8 +2327,124 @@ async function saveManualDrawnRoute() {
 }
 
 // =========================================================
-// 2. SEPARATE FUNCTION: GPS FOLLOW RECORDER (ANTI-JUMP)
+// 2. SEPARATE FUNCTION: GPS FOLLOW RECORDER (SCREEN-OFF & APP-SWITCH PROOF)
 // =========================================================
+function recordIncomingGpsFollowPoint(lat, lng, acc = 15, isFromResume = false) {
+    if (!window.isGpsFollowActive || window.isGpsPaused) return;
+    const statusEl = document.getElementById('gpsFollowStatus');
+    const now = Date.now();
+
+    if (acc && acc > 50) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:#e65100;">⚠️ GPS सिग्नल कमज़ोर (±${Math.round(acc)}m), स्थिर होने की प्रतीक्षा...</span>`;
+        return;
+    }
+
+    if (window.map) window.map.panTo([lat, lng]);
+
+    if (!window.lastValidGpsPt) {
+        window.lastValidGpsPt = [lat, lng];
+        window.lastValidGpsTime = now;
+        window.gpsRecordedPoints.push([lat, lng]);
+        updateGpsTempLine();
+        saveGpsFollowStateLocal();
+        if (statusEl) statusEl.innerHTML = `<span style="color:#2e7d32;">🟢 GPS रिकॉर्डिंग चालू (±${Math.round(acc)}m सटीक)</span>`;
+        return;
+    }
+
+    const distMoved = getDistanceInMeters(window.lastValidGpsPt[0], window.lastValidGpsPt[1], lat, lng);
+    const timeDiffSec = Math.max((now - window.lastValidGpsTime) / 1000, 1);
+    const speedMps = distMoved / timeDiffSec;
+
+    if (distMoved < 10) return;
+
+    // App se bahar jaakar ya screen off hone ke baad wapas aane par lamba valid movement allow karein (jab tak speed realistic ho < 30 m/s)
+    const maxJumpMeters = isFromResume ? 2500 : 180;
+    if (distMoved > maxJumpMeters || speedMps > 30) {
+        console.warn(`GPS Jump Blocked: ${Math.round(distMoved)}m`);
+        if (statusEl) statusEl.innerHTML = `<span style="color:#d84315;">🛡️ GPS जंप रोका गया (${Math.round(distMoved)}m उछाल फ़िल्टर)</span>`;
+        return;
+    }
+
+    window.lastValidGpsPt = [lat, lng];
+    window.lastValidGpsTime = now;
+    window.gpsRecordedPoints.push([lat, lng]);
+    updateGpsTempLine();
+    saveGpsFollowStateLocal();
+
+    if (statusEl) statusEl.innerHTML = `<span style="color:#2e7d32;">🟢 मार्ग लगातार रिकॉर्ड हो रहा है (±${Math.round(acc)}m)</span>`;
+}
+
+function ensureGpsFollowWatcherRunning() {
+    if (!window.isGpsFollowActive || !navigator.geolocation) return;
+
+    if (window.gpsWatchId === null) {
+        window.gpsWatchId = navigator.geolocation.watchPosition(pos => {
+            recordIncomingGpsFollowPoint(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, false);
+        }, err => {
+            const statusEl = document.getElementById('gpsFollowStatus');
+            if (statusEl) statusEl.innerHTML = `<span style="color:#dc3545;">❌ GPS त्रुटि: ${err.message}</span>`;
+        }, {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 15000
+        });
+    }
+
+    // Har 10 second me periodic backup poll taaki background throttling ke baad bhi point miss na ho
+    if (!window.gpsBackupInterval) {
+        window.gpsBackupInterval = setInterval(() => {
+            if (!window.isGpsFollowActive || window.isGpsPaused || !navigator.geolocation) return;
+            navigator.geolocation.getCurrentPosition(
+                (pos) => recordIncomingGpsFollowPoint(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, true),
+                () => {},
+                { enableHighAccuracy: true, timeout: 8000, maximumAge: 3000 }
+            );
+        }, 10000);
+    }
+}
+
+function restoreActiveGpsFollowIfNeeded() {
+    const saved = loadGpsFollowStateLocal();
+    if (!saved || !saved.active || !Array.isArray(saved.points)) return;
+    if (saved.yatraId && window.activeYatra && String(saved.yatraId) !== String(window.activeYatra.id)) return;
+
+    window.isGpsFollowActive = true;
+    window.isGpsPaused = !!saved.paused;
+    window.gpsRecordedPoints = saved.points;
+    window.lastValidGpsPt = saved.lastPt || (saved.points.length > 0 ? saved.points[saved.points.length - 1] : null);
+    window.lastValidGpsTime = saved.lastTime || Date.now();
+
+    const hud = document.getElementById('liveYatraNavHud');
+    if (hud) hud.style.display = 'none';
+
+    const gpsToolbar = document.getElementById('gpsFollowToolbar');
+    if (gpsToolbar) {
+        gpsToolbar.style.display = 'block';
+        gpsToolbar.style.cursor = 'move';
+        makeElementMovable(gpsToolbar);
+    }
+
+    const pauseBtn = document.getElementById('btnPauseResumeGps');
+    const statusEl = document.getElementById('gpsFollowStatus');
+    if (window.isGpsPaused) {
+        if (pauseBtn) {
+            pauseBtn.innerText = '▶️ फिर चालू करें';
+            pauseBtn.style.background = '#2e7d32';
+        }
+        if (statusEl) statusEl.innerText = '⏸️ GPS रिकॉर्डिंग रुकी हुई है।';
+    } else {
+        if (pauseBtn) {
+            pauseBtn.innerText = '⏸️ रोकें';
+            pauseBtn.style.background = '#ff9800';
+        }
+        if (statusEl) statusEl.innerHTML = '<span style="color:#2e7d32;">🟢 बैकग्राउंड GPS रिकॉर्डिंग फिर से जुड़ गई है...</span>';
+    }
+
+    updateGpsTempLine();
+    requestGpsFollowWakeLock();
+    ensureGpsFollowWatcherRunning();
+}
+
 function startGpsFollowRecording() {
     if (window.isManualDrawing) cancelManualLineDrawing();
 
@@ -2257,6 +2457,8 @@ function startGpsFollowRecording() {
     window.gpsRecordedPoints = [];
     window.lastValidGpsPt = null;
     window.lastValidGpsTime = 0;
+    saveGpsFollowStateLocal();
+    requestGpsFollowWakeLock();
 
     const hud = document.getElementById('liveYatraNavHud');
     if (hud) hud.style.display = 'none';
@@ -2276,59 +2478,13 @@ function startGpsFollowRecording() {
     }
     if (statusEl) statusEl.innerHTML = '<span style="color:#0288d1;">📡 सटीक GPS सिग्नल की प्रतीक्षा...</span>';
 
-    window.gpsWatchId = navigator.geolocation.watchPosition(pos => {
-        if (!window.isGpsFollowActive || window.isGpsPaused) return;
-
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const acc = pos.coords.accuracy || 999;
-        const now = Date.now();
-
-        if (acc > 35) {
-            if (statusEl) statusEl.innerHTML = `<span style="color:#e65100;">⚠️ GPS सिग्नल कमज़ोर (±${Math.round(acc)}m), स्थिर होने की प्रतीक्षा...</span>`;
-            return;
-        }
-
-        if (window.map) window.map.panTo([lat, lng]);
-
-        if (!window.lastValidGpsPt) {
-            window.lastValidGpsPt = [lat, lng];
-            window.lastValidGpsTime = now;
-            window.gpsRecordedPoints.push([lat, lng]);
-            updateGpsTempLine();
-            if (statusEl) statusEl.innerHTML = `<span style="color:#2e7d32;">🟢 GPS रिकॉर्डिंग चालू (±${Math.round(acc)}m सटीक)</span>`;
-            return;
-        }
-
-        const distMoved = getDistanceInMeters(window.lastValidGpsPt[0], window.lastValidGpsPt[1], lat, lng);
-        const timeDiffSec = Math.max((now - window.lastValidGpsTime) / 1000, 1);
-        const speedMps = distMoved / timeDiffSec;
-
-        if (distMoved < 12) return;
-
-        if (distMoved > 120 || speedMps > 25) {
-            console.warn(`GPS Jump Blocked: ${Math.round(distMoved)}m`);
-            if (statusEl) statusEl.innerHTML = `<span style="color:#d84315;">🛡️ GPS जंप रोका गया (${Math.round(distMoved)}m उछाल फ़िल्टर)</span>`;
-            return;
-        }
-
-        window.lastValidGpsPt = [lat, lng];
-        window.lastValidGpsTime = now;
-        window.gpsRecordedPoints.push([lat, lng]);
-        updateGpsTempLine();
-
-        if (statusEl) statusEl.innerHTML = `<span style="color:#2e7d32;">🟢 मार्ग रिकॉर्ड हो रहा है (±${Math.round(acc)}m सटीक)</span>`;
-    }, err => {
-        if (statusEl) statusEl.innerHTML = `<span style="color:#dc3545;">❌ GPS त्रुटि: ${err.message}</span>`;
-    }, {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 10000
-    });
+    ensureGpsFollowWatcherRunning();
+    triggerImmediateYatriProgressSync();
 }
 
 function pauseResumeGpsFollow() {
     window.isGpsPaused = !window.isGpsPaused;
+    saveGpsFollowStateLocal();
     const btn = document.getElementById('btnPauseResumeGps');
     const statusEl = document.getElementById('gpsFollowStatus');
     if (window.isGpsPaused) {
@@ -2339,6 +2495,9 @@ function pauseResumeGpsFollow() {
         btn.innerText = '⏸️ रोकें';
         btn.style.background = '#ff9800';
         statusEl.innerText = '🟢 GPS रिकॉर्डिंग फिर से चालू...';
+        requestGpsFollowWakeLock();
+        ensureGpsFollowWatcherRunning();
+        triggerImmediateYatriProgressSync();
     }
 }
 
@@ -2357,9 +2516,15 @@ function updateGpsTempLine() {
 function cancelGpsFollowRecording() {
     window.isGpsFollowActive = false;
     window.isGpsPaused = false;
+    saveGpsFollowStateLocal();
+    releaseGpsFollowWakeLock();
     if (window.gpsWatchId !== null) {
         navigator.geolocation.clearWatch(window.gpsWatchId);
         window.gpsWatchId = null;
+    }
+    if (window.gpsBackupInterval !== null) {
+        clearInterval(window.gpsBackupInterval);
+        window.gpsBackupInterval = null;
     }
     window.gpsRecordedPoints = [];
     if (window.gpsTempLine) window.map.removeLayer(window.gpsTempLine);
@@ -2389,7 +2554,6 @@ async function saveGpsFollowedRoute() {
 
     window.activeCustomRoutes.push(data || newRouteObj);
 
-    // Purana OSRM distance/geometry cache clear karein taaki nayi custom route duri turant dikhe
     window.osrmDistanceCache = {};
     window.osrmGeometryCache = {};
 
