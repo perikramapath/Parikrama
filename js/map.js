@@ -1324,115 +1324,145 @@ function openPadavDetailsModal(padavId) {
 // =========================================================
 // YATRI LIVE PROGRESS TRACKER (WORKS 100% OFFLINE + SYNCS DAY-WISE DIARY)
 // =========================================================
-function startYatriLiveProgressTracker() {
-    if (!navigator.geolocation) return;
+function processYatriLiveGpsCoordinates(uLat, uLng, accuracy = 0) {
+    if (accuracy && accuracy > 150) return;
 
     const yatraSlug = (window.activeYatra?.slug || '').toLowerCase();
     const yatraName = (window.activeYatra?.name || '').toLowerCase();
     const isNarmadaParikrama = yatraSlug.includes('narmada') || yatraName.includes('narmada');
 
-    navigator.geolocation.watchPosition(pos => {
-        if (pos.coords.accuracy && pos.coords.accuracy > 150) return;
+    if (window.ParikramaOffline && window.ParikramaOffline.isBatterySaverEnabled() && window.lastBatterySaverGpsPt) {
+        const movedSinceLast = getDistanceInMeters(window.lastBatterySaverGpsPt[0], window.lastBatterySaverGpsPt[1], uLat, uLng);
+        if (movedSinceLast < 20) return;
+    }
+    window.lastBatterySaverGpsPt = [uLat, uLng];
 
-        const uLat = pos.coords.latitude;
-        const uLng = pos.coords.longitude;
+    updateMyBlueLocationDot(uLat, uLng, false);
+    syncYatriLiveLocationToDb(uLat, uLng, false);
 
-        if (window.ParikramaOffline && window.ParikramaOffline.isBatterySaverEnabled() && window.lastBatterySaverGpsPt) {
-            const movedSinceLast = getDistanceInMeters(window.lastBatterySaverGpsPt[0], window.lastBatterySaverGpsPt[1], uLat, uLng);
-            if (movedSinceLast < 20) return;
-        }
-        window.lastBatterySaverGpsPt = [uLat, uLng];
+    if (window.ParikramaOffline && typeof window.ParikramaOffline.recordLiveGpsForDiary === 'function') {
+        window.ParikramaOffline.recordLiveGpsForDiary(uLat, uLng);
+    }
 
-        updateMyBlueLocationDot(uLat, uLng, false);
-        syncYatriLiveLocationToDb(uLat, uLng, false);
+    if (window.map && !window.hasCenteredOnLiveGps && !window.isManualDrawing && !window.isGpsFollowActive) {
+        window.hasCenteredOnLiveGps = true;
+        window.map.setView([uLat, uLng], 13);
+    }
 
-        if (window.ParikramaOffline && typeof window.ParikramaOffline.recordLiveGpsForDiary === 'function') {
-            window.ParikramaOffline.recordLiveGpsForDiary(uLat, uLng);
-        }
+    let statusChanged = false;
 
-        if (window.map && !window.hasCenteredOnLiveGps && !window.isManualDrawing && !window.isGpsFollowActive) {
-            window.hasCenteredOnLiveGps = true;
-            window.map.setView([uLat, uLng], 13);
-        }
+    if (!isUserAdminOrMod()) {
+        (window.activeYatraPadavs || []).forEach(p => {
+            if (window.passedPadavIds.has(p.id)) return;
+            const distFromPadav = getDistanceInMeters(uLat, uLng, p.lat, p.lng);
 
-        let statusChanged = false;
+            if (distFromPadav > 500) {
+                const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
+                const nextArr = synced.list;
 
-        if (!isUserAdminOrMod()) {
-            (window.activeYatraPadavs || []).forEach(p => {
-                if (window.passedPadavIds.has(p.id)) return;
-                const distFromPadav = getDistanceInMeters(uLat, uLng, p.lat, p.lng);
+                if (Array.isArray(nextArr) && nextArr.length > 0) {
+                    const movedTowardAnyNext = nextArr.some(np => {
+                        const targetObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
+                        if (!targetObj) return false;
+                        const totalSpan = getDistanceInMeters(p.lat, p.lng, targetObj.lat, targetObj.lng);
+                        const distToNext = getDistanceInMeters(uLat, uLng, targetObj.lat, targetObj.lng);
+                        return distToNext < (totalSpan - 150);
+                    });
 
-                if (distFromPadav > 500) {
-                    const synced = getSyncedNextPadavsForPadav(p, isNarmadaParikrama);
-                    const nextArr = synced.list;
-
-                    if (Array.isArray(nextArr) && nextArr.length > 0) {
-                        const movedTowardAnyNext = nextArr.some(np => {
-                            const targetObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
-                            if (!targetObj) return false;
-                            const totalSpan = getDistanceInMeters(p.lat, p.lng, targetObj.lat, targetObj.lng);
-                            const distToNext = getDistanceInMeters(uLat, uLng, targetObj.lat, targetObj.lng);
-                            return distToNext < (totalSpan - 150);
-                        });
-
-                        if (movedTowardAnyNext) {
-                            window.passedPadavIds.add(p.id);
-                            if (window.ParikramaOffline && typeof window.ParikramaOffline.recordPadavStopInDiary === 'function') {
-                                window.ParikramaOffline.recordPadavStopInDiary(p, false);
-                            }
-                            if (String(window.focusedOriginPadavId) === String(p.id)) {
-                                window.focusedOriginPadavId = null;
-                            }
-                            statusChanged = true;
-
-                            if (nextArr.length > 1) {
-                                const branchProgress = nextArr.map(np => {
-                                    const tObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
-                                    if (!tObj) return null;
-                                    const span = getDistanceInMeters(p.lat, p.lng, tObj.lat, tObj.lng);
-                                    const rem = getDistanceInMeters(uLat, uLng, tObj.lat, tObj.lng);
-                                    return { id: tObj.id, gainedMeters: span - rem };
-                                }).filter(Boolean);
-
-                                if (branchProgress.length > 1) {
-                                    branchProgress.sort((a, b) => b.gainedMeters - a.gainedMeters);
-                                    const chosen = branchProgress[0];
-                                    const runnerUp = branchProgress[1];
-                                    if (chosen.gainedMeters > 450 && (chosen.gainedMeters - runnerUp.gainedMeters) > 350) {
-                                        for (let k = 1; k < branchProgress.length; k++) {
-                                            window.abandonedBranchIds.add(branchProgress[k].id);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if (window.selectedStartPadav && String(window.selectedStartPadav.id) === String(p.id)) {
+                    if (movedTowardAnyNext) {
                         window.passedPadavIds.add(p.id);
                         if (window.ParikramaOffline && typeof window.ParikramaOffline.recordPadavStopInDiary === 'function') {
                             window.ParikramaOffline.recordPadavStopInDiary(p, false);
                         }
+                        if (String(window.focusedOriginPadavId) === String(p.id)) {
+                            window.focusedOriginPadavId = null;
+                        }
                         statusChanged = true;
-                    }
-                }
-            });
-        }
 
-        if (statusChanged) {
-            applyMapFilters();
-        } else {
-            const subVal = document.getElementById('subRouteFilter')?.value || 'all';
-            const catVal = document.getElementById('categoryFilter')?.value || 'all';
-            const currentVisible = (window.activeYatraPadavs || []).filter(p =>
-                (isUserAdminOrMod() || !window.passedPadavIds.has(p.id)) &&
-                !window.abandonedBranchIds.has(p.id) &&
-                (subVal === 'all' || p.sub_route === subVal) &&
-                (catVal === 'all' || p.category === catVal)
-            );
-            drawAutoPadavConnectingLines(currentVisible);
-        }
+                        if (nextArr.length > 1) {
+                            const branchProgress = nextArr.map(np => {
+                                const tObj = window.activeYatraPadavs.find(x => String(x.id) === String(np.id));
+                                if (!tObj) return null;
+                                const span = getDistanceInMeters(p.lat, p.lng, tObj.lat, tObj.lng);
+                                const rem = getDistanceInMeters(uLat, uLng, tObj.lat, tObj.lng);
+                                return { id: tObj.id, gainedMeters: span - rem };
+                            }).filter(Boolean);
+
+                            if (branchProgress.length > 1) {
+                                branchProgress.sort((a, b) => b.gainedMeters - a.gainedMeters);
+                                const chosen = branchProgress[0];
+                                const runnerUp = branchProgress[1];
+                                if (chosen.gainedMeters > 450 && (chosen.gainedMeters - runnerUp.gainedMeters) > 350) {
+                                    for (let k = 1; k < branchProgress.length; k++) {
+                                        window.abandonedBranchIds.add(branchProgress[k].id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (window.selectedStartPadav && String(window.selectedStartPadav.id) === String(p.id)) {
+                    window.passedPadavIds.add(p.id);
+                    if (window.ParikramaOffline && typeof window.ParikramaOffline.recordPadavStopInDiary === 'function') {
+                        window.ParikramaOffline.recordPadavStopInDiary(p, false);
+                    }
+                    statusChanged = true;
+                }
+            }
+        });
+    }
+
+    if (statusChanged) {
+        applyMapFilters();
+    } else {
+        const subVal = document.getElementById('subRouteFilter')?.value || 'all';
+        const catVal = document.getElementById('categoryFilter')?.value || 'all';
+        const currentVisible = (window.activeYatraPadavs || []).filter(p =>
+            (isUserAdminOrMod() || !window.passedPadavIds.has(p.id)) &&
+            !window.abandonedBranchIds.has(p.id) &&
+            (subVal === 'all' || p.sub_route === subVal) &&
+            (catVal === 'all' || p.category === catVal)
+        );
+        drawAutoPadavConnectingLines(currentVisible);
+    }
+}
+
+function triggerImmediateYatriProgressSync() {
+    if (!navigator.geolocation || !window.activeYatra) return;
+    window.lastBatterySaverGpsPt = null;
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            processYatriLiveGpsCoordinates(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+            syncYatriLiveLocationToDb(pos.coords.latitude, pos.coords.longitude, true);
+        },
+        () => {},
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+    );
+}
+
+function startYatriLiveProgressTracker() {
+    if (!navigator.geolocation) return;
+
+    navigator.geolocation.watchPosition(pos => {
+        processYatriLiveGpsCoordinates(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
     }, err => {
         console.warn("Live GPS tracking paused:", err.message);
     }, { enableHighAccuracy: true, maximumAge: 5000 });
+
+    if (!window._mapLifecycleSyncBound) {
+        window._mapLifecycleSyncBound = true;
+        const onResumeSync = () => {
+            if (window.map && typeof window.map.invalidateSize === 'function') {
+                setTimeout(() => window.map.invalidateSize(), 150);
+            }
+            triggerImmediateYatriProgressSync();
+        };
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') onResumeSync();
+        });
+        window.addEventListener('pageshow', onResumeSync);
+        window.addEventListener('focus', onResumeSync);
+        window.addEventListener('online', onResumeSync);
+    }
 }
 
 async function initAndLoadIsolatedMap() {
