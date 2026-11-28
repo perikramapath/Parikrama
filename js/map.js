@@ -1,5 +1,5 @@
 // =========================================================
-// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & HYBRID CUSTOM+ROAD DISTANCE
+// PARIKRAMAPATH - OFFLINE AUTO-SYNC, PERMANENT START LOCK & FAST HYBRID CUSTOM+ROAD DISTANCE
 // =========================================================
 
 window.map = null;
@@ -13,6 +13,8 @@ window.padavMarkersMap = {};
 window.adminYatriMarkersMap = {};
 window.osrmGeometryCache = {};
 window.osrmDistanceCache = {};
+window.routeMatchCache = {};
+window.preparedCustomPolylinesCache = null;
 window.focusedOriginPadavId = null;
 
 // Live Yatri GPS Tracking, 500m Auto-Hide & Branch Selection
@@ -29,6 +31,13 @@ window.lastBatterySaverGpsPt = null;
 window.adminYatriRealtimeSub = null;
 window.adminVisitorRealtimeSub = null;
 window.isExplicitlyChangingStartPoint = false;
+
+function invalidateCustomRouteCaches() {
+    window.preparedCustomPolylinesCache = null;
+    window.routeMatchCache = {};
+    window.osrmDistanceCache = {};
+    window.osrmGeometryCache = {};
+}
 
 function getOrCreateGuestVisitorId() {
     try {
@@ -193,7 +202,7 @@ function injectNextPadavPickerSearch() {
         if (modalEl) {
             const obs = new MutationObserver(() => {
                 if (modalEl.style.display !== 'none') {
-                    injectNextPadavPickerSearch();
+                    setTimeout(injectNextPadavPickerSearch, 0);
                 }
             });
             obs.observe(modalEl, { attributes: true, attributeFilter: ['style'] });
@@ -403,8 +412,7 @@ window.deleteCustomRouteLine = async function(routeKey) {
     }
 
     window.activeCustomRoutes.splice(routeIdx, 1);
-    window.osrmDistanceCache = {};
-    window.osrmGeometryCache = {};
+    invalidateCustomRouteCaches();
 
     if (window.ParikramaOffline) {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
@@ -513,25 +521,70 @@ window.searchQuickAddPadavLocation = async function() {
 };
 
 // =========================================================
-// BIDIRECTIONAL CUSTOM ROUTE + HYBRID ROAD CONNECTOR
-// (A->B aur B->A dono dishaon me + Custom line ke end se aage Road connect)
+// FAST BOUNDING-BOX & CACHED BIDIRECTIONAL CUSTOM ROUTE + HYBRID ROAD CONNECTOR
+// (Prevents CPU freeze / Page Unresponsive even with 1000+ route points)
 // =========================================================
 function getAllCustomRoutePolylines() {
     const routes = window.activeCustomRoutes || [];
+    if (window.preparedCustomPolylinesCache && window.preparedCustomPolylinesCache._sourceRef === routes && window.preparedCustomPolylinesCache._len === routes.length) {
+        return window.preparedCustomPolylinesCache.items;
+    }
+
     const list = [];
     for (const r of routes) {
         if (!Array.isArray(r.coordinates) || r.coordinates.length < 2) continue;
-        const pts = r.coordinates
-            .map(pt => Array.isArray(pt) ? [parseFloat(pt[0]), parseFloat(pt[1])] : [parseFloat(pt.lat), parseFloat(pt.lng)])
-            .filter(pt => !isNaN(pt[0]) && !isNaN(pt[1]));
+        const pts = [];
+        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+
+        for (let i = 0; i < r.coordinates.length; i++) {
+            const pt = r.coordinates[i];
+            const lat = Array.isArray(pt) ? parseFloat(pt[0]) : parseFloat(pt.lat);
+            const lng = Array.isArray(pt) ? parseFloat(pt[1]) : parseFloat(pt.lng);
+            if (isNaN(lat) || isNaN(lng)) continue;
+            pts.push([lat, lng]);
+            if (lat < minLat) minLat = lat;
+            if (lat > maxLat) maxLat = lat;
+            if (lng < minLng) minLng = lng;
+            if (lng > maxLng) maxLng = lng;
+        }
+
         if (pts.length >= 2) {
-            list.push({ route: r, coords: pts });
+            // Cumulative distance array taaki kisi bhi do index ke beech ki duri O(1) me mile
+            const cumMeters = new Float64Array(pts.length);
+            for (let i = 1; i < pts.length; i++) {
+                cumMeters[i] = cumMeters[i - 1] + getDistanceInMeters(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+            }
+
+            list.push({
+                route: r,
+                coords: pts,
+                cumMeters,
+                bbox: { minLat, maxLat, minLng, maxLng }
+            });
         }
     }
+
+    window.preparedCustomPolylinesCache = {
+        _sourceRef: routes,
+        _len: routes.length,
+        items: list
+    };
     return list;
 }
 
-function getNearestPointOnPolyline(lat, lng, coords) {
+function isPointInsideBbox(lat, lng, bbox, padDeg = 0.015) {
+    return lat >= (bbox.minLat - padDeg) &&
+           lat <= (bbox.maxLat + padDeg) &&
+           lng >= (bbox.minLng - padDeg) &&
+           lng <= (bbox.maxLng + padDeg);
+}
+
+function getNearestPointOnPolyline(lat, lng, polyItem) {
+    const coords = polyItem.coords;
+    if (!isPointInsideBbox(lat, lng, polyItem.bbox, 0.015)) {
+        return { index: -1, distMeters: Infinity };
+    }
+
     let bestIdx = -1;
     let bestDist = Infinity;
     for (let i = 0; i < coords.length; i++) {
@@ -544,7 +597,11 @@ function getNearestPointOnPolyline(lat, lng, coords) {
     return { index: bestIdx, distMeters: bestDist };
 }
 
-function measurePolylineSegmentMeters(coords, idxA, idxB) {
+function measurePolylineSegmentMeters(polyItem, idxA, idxB) {
+    if (polyItem.cumMeters) {
+        return Math.abs(polyItem.cumMeters[idxB] - polyItem.cumMeters[idxA]);
+    }
+    const coords = polyItem.coords;
     const from = Math.min(idxA, idxB);
     const to = Math.max(idxA, idxB);
     let total = 0;
@@ -555,19 +612,30 @@ function measurePolylineSegmentMeters(coords, idxA, idxB) {
 }
 
 function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
+    if (isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) return null;
+
+    const cacheKey = `${lat1.toFixed(5)}_${lng1.toFixed(5)}_${lat2.toFixed(5)}_${lng2.toFixed(5)}`;
+    if (Object.prototype.hasOwnProperty.call(window.routeMatchCache, cacheKey)) {
+        return window.routeMatchCache[cacheKey];
+    }
+
     const polylines = getAllCustomRoutePolylines();
-    if (polylines.length === 0) return null;
+    if (polylines.length === 0) {
+        window.routeMatchCache[cacheKey] = null;
+        return null;
+    }
 
     const snapToleranceMeters = 850;
     let bestFullMeters = Infinity;
 
     // 1. Single custom route mein dono padav (A->B aur B->A dono dishaon me)
-    for (const { coords } of polylines) {
-        const nearStart = getNearestPointOnPolyline(lat1, lng1, coords);
-        const nearEnd = getNearestPointOnPolyline(lat2, lng2, coords);
+    for (const polyItem of polylines) {
+        const nearStart = getNearestPointOnPolyline(lat1, lng1, polyItem);
+        if (nearStart.distMeters > snapToleranceMeters) continue;
 
-        if (nearStart.distMeters <= snapToleranceMeters && nearEnd.distMeters <= snapToleranceMeters) {
-            const segMeters = measurePolylineSegmentMeters(coords, nearStart.index, nearEnd.index);
+        const nearEnd = getNearestPointOnPolyline(lat2, lng2, polyItem);
+        if (nearEnd.distMeters <= snapToleranceMeters) {
+            const segMeters = measurePolylineSegmentMeters(polyItem, nearStart.index, nearEnd.index);
             const totalMeters = segMeters + (nearStart.distMeters > 40 ? nearStart.distMeters : 0) + (nearEnd.distMeters > 40 ? nearEnd.distMeters : 0);
             if (totalMeters > 10 && totalMeters < bestFullMeters) {
                 bestFullMeters = totalMeters;
@@ -576,29 +644,42 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
     }
 
     if (bestFullMeters < Infinity) {
-        return {
+        const res = {
             mode: 'full',
             customKm: parseFloat((bestFullMeters / 1000).toFixed(1))
         };
+        window.routeMatchCache[cacheKey] = res;
+        return res;
     }
 
-    // 2. Do jude hue (chained) custom route segments (A->B aur B->A dono me)
+    // 2. Do jude hue (chained) custom route segments (A->B aur B->A dono me - fast stride sampling)
     for (let i = 0; i < polylines.length; i++) {
-        const rA = polylines[i].coords;
-        const startOnA = getNearestPointOnPolyline(lat1, lng1, rA);
+        const polyA = polylines[i];
+        const startOnA = getNearestPointOnPolyline(lat1, lng1, polyA);
         if (startOnA.distMeters > snapToleranceMeters) continue;
 
         for (let j = 0; j < polylines.length; j++) {
             if (i === j) continue;
-            const rB = polylines[j].coords;
-            const endOnB = getNearestPointOnPolyline(lat2, lng2, rB);
+            const polyB = polylines[j];
+            // Bounding box overlap check
+            if (polyA.bbox.maxLat + 0.01 < polyB.bbox.minLat || polyA.bbox.minLat - 0.01 > polyB.bbox.maxLat ||
+                polyA.bbox.maxLng + 0.01 < polyB.bbox.minLng || polyA.bbox.minLng - 0.01 > polyB.bbox.maxLng) {
+                continue;
+            }
+
+            const endOnB = getNearestPointOnPolyline(lat2, lng2, polyB);
             if (endOnB.distMeters > snapToleranceMeters) continue;
+
+            const rA = polyA.coords;
+            const rB = polyB.coords;
+            const stepA = Math.max(1, Math.floor(rA.length / 80));
+            const stepB = Math.max(1, Math.floor(rB.length / 80));
 
             let bestJunctionDist = 450;
             let jIdxA = -1;
             let jIdxB = -1;
-            for (let a = 0; a < rA.length; a++) {
-                for (let b = 0; b < rB.length; b++) {
+            for (let a = 0; a < rA.length; a += stepA) {
+                for (let b = 0; b < rB.length; b += stepB) {
                     const d = getDistanceInMeters(rA[a][0], rA[a][1], rB[b][0], rB[b][1]);
                     if (d < bestJunctionDist) {
                         bestJunctionDist = d;
@@ -609,8 +690,8 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
             }
 
             if (jIdxA !== -1 && jIdxB !== -1) {
-                const distA = measurePolylineSegmentMeters(rA, startOnA.index, jIdxA);
-                const distB = measurePolylineSegmentMeters(rB, jIdxB, endOnB.index);
+                const distA = measurePolylineSegmentMeters(polyA, startOnA.index, jIdxA);
+                const distB = measurePolylineSegmentMeters(polyB, jIdxB, endOnB.index);
                 const combined = distA + distB + bestJunctionDist + (startOnA.distMeters > 40 ? startOnA.distMeters : 0) + (endOnB.distMeters > 40 ? endOnB.distMeters : 0);
                 if (combined > 10 && combined < bestFullMeters) {
                     bestFullMeters = combined;
@@ -620,10 +701,12 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
     }
 
     if (bestFullMeters < Infinity) {
-        return {
+        const res = {
             mode: 'full',
             customKm: parseFloat((bestFullMeters / 1000).toFixed(1))
         };
+        window.routeMatchCache[cacheKey] = res;
+        return res;
     }
 
     // 3. PARTIAL HYBRID: Start padav custom route par hai aur custom route jahan road par khatam hota hai,
@@ -632,9 +715,10 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
     let bestHeuristicMeters = Infinity;
     const directSpanMeters = getDistanceInMeters(lat1, lng1, lat2, lng2);
 
-    for (const { coords } of polylines) {
-        const nearStart = getNearestPointOnPolyline(lat1, lng1, coords);
-        const nearEnd = getNearestPointOnPolyline(lat2, lng2, coords);
+    for (const polyItem of polylines) {
+        const coords = polyItem.coords;
+        const nearStart = getNearestPointOnPolyline(lat1, lng1, polyItem);
+        const nearEnd = getNearestPointOnPolyline(lat2, lng2, polyItem);
 
         if (nearStart.distMeters <= snapToleranceMeters && nearEnd.distMeters > snapToleranceMeters) {
             const firstPt = coords[0];
@@ -645,7 +729,7 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
             const exitIdx = distLastToTarget <= distFirstToTarget ? (coords.length - 1) : 0;
             const exitPt = coords[exitIdx];
             const remToTarget = Math.min(distFirstToTarget, distLastToTarget);
-            const customSegMeters = measurePolylineSegmentMeters(coords, nearStart.index, exitIdx) + (nearStart.distMeters > 40 ? nearStart.distMeters : 0);
+            const customSegMeters = measurePolylineSegmentMeters(polyItem, nearStart.index, exitIdx) + (nearStart.distMeters > 40 ? nearStart.distMeters : 0);
 
             if (customSegMeters > 30 && remToTarget < (directSpanMeters * 1.15)) {
                 const heuristic = customSegMeters + remToTarget;
@@ -670,7 +754,7 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
             const entryIdx = distStartToFirst <= distStartToLast ? 0 : (coords.length - 1);
             const entryPt = coords[entryIdx];
             const approachFromStart = Math.min(distStartToFirst, distStartToLast);
-            const customSegMeters = measurePolylineSegmentMeters(coords, entryIdx, nearEnd.index) + (nearEnd.distMeters > 40 ? nearEnd.distMeters : 0);
+            const customSegMeters = measurePolylineSegmentMeters(polyItem, entryIdx, nearEnd.index) + (nearEnd.distMeters > 40 ? nearEnd.distMeters : 0);
 
             if (customSegMeters > 30 && approachFromStart < (directSpanMeters * 1.15)) {
                 const heuristic = approachFromStart + customSegMeters;
@@ -687,6 +771,7 @@ function findCustomRouteMatch(lat1, lng1, lat2, lng2) {
         }
     }
 
+    window.routeMatchCache[cacheKey] = bestPartial;
     return bestPartial;
 }
 
@@ -936,7 +1021,8 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
             return { list: sameTatManual, isAuto: false };
         }
 
-        const sameTatCandidates = (window.activeYatraPadavs || [])
+        // Sirf sabse nazdeeki 5 padav par hi custom route check karein taaki UI kabhi freeze na ho
+        const nearCandidates = (window.activeYatraPadavs || [])
             .filter(other => {
                 if (String(other.id) === String(p.id)) return false;
                 if (window.passedPadavIds.has(other.id)) return false;
@@ -945,14 +1031,24 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
                 if (!isSameNarmadaTat(p, other)) return false;
                 return isCorrectNarmadaDirection(p, other);
             })
-            .map(other => {
+            .map(other => ({
+                other,
+                rawDist: getDistanceInMeters(p.lat, p.lng, other.lat, other.lng)
+            }))
+            .sort((a, b) => a.rawDist - b.rawDist)
+            .slice(0, 5);
+
+        const sameTatCandidates = nearCandidates
+            .map(({ other, rawDist }) => {
                 const customMatch = findCustomRouteMatch(
                     parseFloat(p.lat), parseFloat(p.lng),
                     parseFloat(other.lat), parseFloat(other.lng)
                 );
-                const knownKm = customMatch ? getCustomRouteKmBetween(parseFloat(p.lat), parseFloat(p.lng), parseFloat(other.lat), parseFloat(other.lng)) : getResolvedPathKmSync(p, other, null, 0);
+                const knownKm = customMatch
+                    ? getCustomRouteKmBetween(parseFloat(p.lat), parseFloat(p.lng), parseFloat(other.lat), parseFloat(other.lng))
+                    : getResolvedPathKmSync(p, other, null, 0);
                 const priorityBonus = customMatch ? (customMatch.mode === 'full' ? -50000 : -30000) : 0;
-                const sortOrderMetric = (knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng)) + priorityBonus;
+                const sortOrderMetric = (knownKm !== null ? (knownKm * 1000) : rawDist) + priorityBonus;
                 return {
                     id: other.id,
                     name: other.name,
@@ -975,9 +1071,15 @@ function getSyncedNextPadavsForPadav(p, isNarmadaParikrama) {
     if ((window.activeYatraPadavs || []).length > 1) {
         const autoOther = window.activeYatraPadavs
             .filter(other => other.id !== p.id && !window.passedPadavIds.has(other.id) && !window.abandonedBranchIds.has(other.id) && (!p.sub_route || !other.sub_route || other.sub_route === p.sub_route))
-            .map(other => {
+            .map(other => ({
+                other,
+                rawDist: getDistanceInMeters(p.lat, p.lng, other.lat, other.lng)
+            }))
+            .sort((a, b) => a.rawDist - b.rawDist)
+            .slice(0, 5)
+            .map(({ other, rawDist }) => {
                 const knownKm = getResolvedPathKmSync(p, other, null, 0);
-                const sortOrderMetric = knownKm !== null ? (knownKm * 1000) : getDistanceInMeters(p.lat, p.lng, other.lat, other.lng);
+                const sortOrderMetric = knownKm !== null ? (knownKm * 1000) : rawDist;
                 return {
                     id: other.id,
                     name: other.name,
@@ -1695,6 +1797,7 @@ async function initAndLoadIsolatedMap() {
     }
 
     window.activeCustomRoutes = loadedRoutes;
+    invalidateCustomRouteCaches();
     renderCustomRoutesOnMap();
 
     // 2. AB PADAVS RENDER KAREIN
@@ -2288,8 +2391,7 @@ async function saveManualDrawnRoute() {
             Object.assign(existingRoute, updatedObj);
         }
 
-        window.osrmDistanceCache = {};
-        window.osrmGeometryCache = {};
+        invalidateCustomRouteCaches();
 
         if (window.ParikramaOffline) {
             window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
@@ -2313,9 +2415,7 @@ async function saveManualDrawnRoute() {
     if (error) return alert("Route save error: " + error.message);
 
     window.activeCustomRoutes.push(data || newRouteObj);
-
-    window.osrmDistanceCache = {};
-    window.osrmGeometryCache = {};
+    invalidateCustomRouteCaches();
 
     if (window.ParikramaOffline) {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
@@ -2357,7 +2457,6 @@ function recordIncomingGpsFollowPoint(lat, lng, acc = 15, isFromResume = false) 
 
     if (distMoved < 10) return;
 
-    // App se bahar jaakar ya screen off hone ke baad wapas aane par lamba valid movement allow karein (jab tak speed realistic ho < 30 m/s)
     const maxJumpMeters = isFromResume ? 2500 : 180;
     if (distMoved > maxJumpMeters || speedMps > 30) {
         console.warn(`GPS Jump Blocked: ${Math.round(distMoved)}m`);
@@ -2390,7 +2489,6 @@ function ensureGpsFollowWatcherRunning() {
         });
     }
 
-    // Har 10 second me periodic backup poll taaki background throttling ke baad bhi point miss na ho
     if (!window.gpsBackupInterval) {
         window.gpsBackupInterval = setInterval(() => {
             if (!window.isGpsFollowActive || window.isGpsPaused || !navigator.geolocation) return;
@@ -2553,9 +2651,7 @@ async function saveGpsFollowedRoute() {
     if (error) return alert("Save Error: " + error.message);
 
     window.activeCustomRoutes.push(data || newRouteObj);
-
-    window.osrmDistanceCache = {};
-    window.osrmGeometryCache = {};
+    invalidateCustomRouteCaches();
 
     if (window.ParikramaOffline) {
         window.ParikramaOffline.saveYatraOfflinePack(window.activeYatra, window.activeYatraPadavs, window.activeCustomRoutes);
