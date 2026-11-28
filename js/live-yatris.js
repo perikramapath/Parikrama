@@ -1,19 +1,39 @@
 // =========================================================
-// PARIKRAMAPATH - LIVE ACTIVE YATRI TRACKER (ALL YATRAS FOR SUPER_ADMIN & ADMIN)
+// PARIKRAMAPATH - LIVE ACTIVE YATRI TRACKER (BACKGROUND + RESUME + 2-MIN ADMIN REFRESH)
 // =========================================================
 
 let yatriPingInterval = null;
+let yatriWatchId = null;
+let adminRefreshInterval = null;
 let adminLiveLayer = null;
 let adminLiveRealtime = null;
 let adminGuestRealtime = null;
 let liveYatriMarkers = {};
+let knownOnlineYatriKeys = new Set();
+let hasInitialYatriLoadDone = false;
 let isAdminLiveVisible = true;
 let cachedYatrasNameMap = {};
+let lastPendingUpdatesSignature = '';
+let screenWakeLockSentinel = null;
+let lifecycleListenersAttached = false;
 
 function isStrictAdmin() {
     if (!window.currentProfile) return false;
     const cleanRole = (window.currentProfile.role || '').toLowerCase().trim().replace(/\s+/g, '_');
     return (cleanRole === 'super_admin' || cleanRole === 'admin');
+}
+
+function getGuestVisitorIdSafe() {
+    try {
+        let vid = localStorage.getItem('parikrama_guest_visitor_id');
+        if (!vid) {
+            vid = 'guest_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now();
+            localStorage.setItem('parikrama_guest_visitor_id', vid);
+        }
+        return vid;
+    } catch (e) {
+        return 'guest_temp_' + Date.now();
+    }
 }
 
 async function ensureYatrasNameMap() {
@@ -45,19 +65,52 @@ async function ensureYatrasNameMap() {
     return cachedYatrasNameMap;
 }
 
-// 1. Active Yatri ki GPS location har 30 second me update karein
-function startYatriLocationBroadcast() {
-    if (yatriPingInterval) return;
+// =========================================================
+// SCREEN WAKE LOCK (SCREEN BAND HONE SE BACHANE KE LIYE JAB MAP KHULA HO)
+// =========================================================
+async function requestAppWakeLock() {
+    try {
+        if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+            if (!screenWakeLockSentinel || screenWakeLockSentinel.released) {
+                screenWakeLockSentinel = await navigator.wakeLock.request('screen');
+            }
+        }
+    } catch (e) {}
+}
 
-    const sendPing = () => {
-        if (!window.currentUser || !window.activeYatra) return;
-        if (!navigator.geolocation) return;
+// =========================================================
+// TOAST NOTIFICATION FOR ADMIN (NAYA YATRI / UPDATE AANE PAR)
+// =========================================================
+function showAdminLiveToast(message, bgColor = '#1b5e20') {
+    if (!isStrictAdmin()) return;
+    let toast = document.getElementById('adminLiveUpdateToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'adminLiveUpdateToast';
+        toast.style.cssText = 'position:fixed; top:66px; left:50%; transform:translateX(-50%); z-index:10000; color:#fff; padding:9px 16px; border-radius:24px; font-family:sans-serif; font-size:12.5px; font-weight:bold; box-shadow:0 4px 16px rgba(0,0,0,0.4); border:1.5px solid #fff; transition:opacity 0.3s ease; max-width:90%; text-align:center;';
+        document.body.appendChild(toast);
+    }
+    toast.style.background = bgColor;
+    toast.innerText = message;
+    toast.style.opacity = '1';
+    toast.style.display = 'block';
 
-        navigator.geolocation.getCurrentPosition(async (pos) => {
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-            window.yatriLiveCoords = { lat, lng };
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => { toast.style.display = 'none'; }, 320);
+    }, 5000);
+}
 
+// =========================================================
+// 1. YATRI LOCATION BROADCAST (REGISTERED + GUEST, BACKGROUND & RESUME SAFE)
+// =========================================================
+async function pushCoordinatesToDatabase(lat, lng) {
+    if (!window.activeYatra || !navigator.onLine || typeof supabaseClient === 'undefined') return;
+    window.yatriLiveCoords = { lat, lng };
+
+    try {
+        if (window.currentUser) {
             await supabaseClient
                 .from('profiles')
                 .update({
@@ -67,20 +120,74 @@ function startYatriLocationBroadcast() {
                     last_seen_at: new Date().toISOString()
                 })
                 .eq('id', window.currentUser.id);
-        }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
-    };
-
-    sendPing();
-    yatriPingInterval = setInterval(sendPing, 30000);
+        } else {
+            const visitorId = getGuestVisitorIdSafe();
+            await supabaseClient
+                .from('live_visitors')
+                .upsert([{
+                    visitor_id: visitorId,
+                    yatra_id: window.activeYatra.id,
+                    live_lat: lat,
+                    live_lng: lng,
+                    last_seen_at: new Date().toISOString()
+                }], { onConflict: 'visitor_id' });
+        }
+    } catch (e) {}
 }
 
-// 2. Sirf super_admin aur admin ke liye Floating Toggle Button aur Live Map Layer (Sabhi Yatras ke liye)
+function sendImmediateYatriGpsPing() {
+    if (!window.activeYatra || !navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+            await pushCoordinatesToDatabase(pos.coords.latitude, pos.coords.longitude);
+        },
+        () => {},
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+    );
+}
+
+function startYatriLocationBroadcast() {
+    attachAppLifecycleSyncListeners();
+    requestAppWakeLock();
+
+    if (!yatriPingInterval) {
+        sendImmediateYatriGpsPing();
+        yatriPingInterval = setInterval(sendImmediateYatriGpsPing, 30000);
+    }
+
+    if (yatriWatchId === null && navigator.geolocation) {
+        yatriWatchId = navigator.geolocation.watchPosition(
+            async (pos) => {
+                if (pos.coords.accuracy && pos.coords.accuracy > 150) return;
+                await pushCoordinatesToDatabase(pos.coords.latitude, pos.coords.longitude);
+            },
+            () => {},
+            { enableHighAccuracy: true, maximumAge: 5000 }
+        );
+    }
+}
+
+// =========================================================
+// 2. ADMIN LIVE TRACKER + 2-MINUTE AUTO REFRESH + UPDATE DETECTOR
+// =========================================================
 function initAdminLiveYatriTracker() {
     if (!isStrictAdmin()) return;
 
+    attachAppLifecycleSyncListeners();
+    requestAppWakeLock();
     injectAdminLiveToggleBtn();
     loadAndRenderActiveYatris();
-    subscribeAdminLiveYatris();
+    subscribeAdminLiveYatris(false);
+
+    // Har 2 minute (120000 ms) me background refresh (cache ko bina chhede)
+    if (!adminRefreshInterval) {
+        adminRefreshInterval = setInterval(() => {
+            if (!isStrictAdmin()) return;
+            loadAndRenderActiveYatris();
+            checkAdminPendingUpdates();
+        }, 120000);
+    }
 }
 
 function injectAdminLiveToggleBtn() {
@@ -120,6 +227,14 @@ function plotSingleYatriMarker(yatri, isGuest = false) {
 
     const markerKey = isGuest ? `guest_${yatri.visitor_id}` : `user_${yatri.id}`;
     const yatraId = isGuest ? yatri.yatra_id : yatri.active_yatra_id;
+
+    // Naya yatri online aaya ho to Admin ko turant batayein
+    if (hasInitialYatriLoadDone && !knownOnlineYatriKeys.has(markerKey)) {
+        const yatraName = yatraId ? (cachedYatrasNameMap[String(yatraId)] || 'परिक्रमा') : 'परिक्रमा';
+        const whoLabel = isGuest ? 'एक नया Guest यात्री' : `🚶 ${yatri.full_name || 'यात्री'}`;
+        showAdminLiveToast(`🟢 ${whoLabel} (${yatraName}) अभी ऑनलाइन जुड़ा!`, '#1b5e20');
+    }
+    knownOnlineYatriKeys.add(markerKey);
 
     if (!adminLiveLayer) {
         adminLiveLayer = L.layerGroup().addTo(mapObj);
@@ -188,18 +303,14 @@ function plotSingleYatriMarker(yatri, isGuest = false) {
 }
 
 async function loadAndRenderActiveYatris() {
-    if (!isStrictAdmin() || !isAdminLiveVisible) return;
+    if (!isStrictAdmin() || !isAdminLiveVisible || !navigator.onLine) return;
     const mapObj = getMapInstance();
     if (!mapObj) return;
 
     await ensureYatrasNameMap();
 
-    if (adminLiveLayer) {
-        adminLiveLayer.clearLayers();
-    }
-    liveYatriMarkers = {};
-
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const activeKeysThisRound = new Set();
 
     const { data: regData } = await supabaseClient
         .from('profiles')
@@ -208,7 +319,10 @@ async function loadAndRenderActiveYatris() {
         .gte('last_seen_at', twoHoursAgo);
 
     if (Array.isArray(regData)) {
-        regData.forEach(u => plotSingleYatriMarker(u, false));
+        regData.forEach(u => {
+            activeKeysThisRound.add(`user_${u.id}`);
+            plotSingleYatriMarker(u, false);
+        });
     }
 
     const { data: guestData } = await supabaseClient
@@ -217,8 +331,22 @@ async function loadAndRenderActiveYatris() {
         .gte('last_seen_at', twoHoursAgo);
 
     if (Array.isArray(guestData)) {
-        guestData.forEach(g => plotSingleYatriMarker(g, true));
+        guestData.forEach(g => {
+            activeKeysThisRound.add(`guest_${g.visitor_id}`);
+            plotSingleYatriMarker(g, true);
+        });
     }
+
+    // Purane inactive markers (jo 2 ghante se offline hain) saaf karein
+    Object.keys(liveYatriMarkers).forEach(k => {
+        if (!activeKeysThisRound.has(k)) {
+            if (adminLiveLayer) adminLiveLayer.removeLayer(liveYatriMarkers[k]);
+            delete liveYatriMarkers[k];
+            knownOnlineYatriKeys.delete(k);
+        }
+    });
+
+    hasInitialYatriLoadDone = true;
 
     const btn = document.getElementById('adminLiveYatriBtn');
     if (btn && isAdminLiveVisible) {
@@ -226,8 +354,40 @@ async function loadAndRenderActiveYatris() {
     }
 }
 
-function subscribeAdminLiveYatris() {
-    if (!isStrictAdmin()) return;
+// =========================================================
+// CHECK NEW PENDING PADAVS / DIARIES FOR ADMIN (2-MIN CHECK)
+// =========================================================
+async function checkAdminPendingUpdates() {
+    if (!isStrictAdmin() || !navigator.onLine || typeof supabaseClient === 'undefined') return;
+
+    try {
+        const [{ count: pendingPadavsCount }, { count: pendingDiariesCount }] = await Promise.all([
+            supabaseClient.from('padavs').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+            supabaseClient.from('yatra_diaries').select('id', { count: 'exact', head: true }).eq('status', 'pending')
+        ]);
+
+        const pCount = pendingPadavsCount || 0;
+        const dCount = pendingDiariesCount || 0;
+        const sig = `${pCount}_${dCount}`;
+
+        if (lastPendingUpdatesSignature && sig !== lastPendingUpdatesSignature && (pCount > 0 || dCount > 0)) {
+            showAdminLiveToast(`🔔 नया अपडेट: ${pCount} पेंडिंग पड़ाव • ${dCount} पेंडिंग डायरी`, '#e65100');
+        }
+        lastPendingUpdatesSignature = sig;
+    } catch (e) {}
+}
+
+function subscribeAdminLiveYatris(forceReconnect = false) {
+    if (!isStrictAdmin() || typeof supabaseClient === 'undefined') return;
+
+    if (forceReconnect) {
+        try {
+            if (adminLiveRealtime) supabaseClient.removeChannel(adminLiveRealtime);
+            if (adminGuestRealtime) supabaseClient.removeChannel(adminGuestRealtime);
+        } catch (e) {}
+        adminLiveRealtime = null;
+        adminGuestRealtime = null;
+    }
 
     if (!adminLiveRealtime) {
         adminLiveRealtime = supabaseClient
@@ -252,4 +412,52 @@ function subscribeAdminLiveYatris() {
             })
             .subscribe();
     }
+}
+
+// =========================================================
+// 3. APP RESUME / SCREEN UNLOCK / NETWORK RETURN HANDLER
+// (App se bahar jaakar wapas aane par turant sync + map fix)
+// =========================================================
+function handleAppResumeOrUnlock() {
+    requestAppWakeLock();
+
+    const mapObj = getMapInstance();
+    if (mapObj && typeof mapObj.invalidateSize === 'function') {
+        setTimeout(() => mapObj.invalidateSize(), 150);
+    }
+
+    // Yatri ke liye: turant GPS ping bhejein
+    if (window.activeYatra) {
+        sendImmediateYatriGpsPing();
+    }
+
+    // Admin ke liye: turant live yatris reload, pending updates check aur realtime reconnect karein
+    if (isStrictAdmin()) {
+        loadAndRenderActiveYatris();
+        checkAdminPendingUpdates();
+        subscribeAdminLiveYatris(true);
+    }
+}
+
+function attachAppLifecycleSyncListeners() {
+    if (lifecycleListenersAttached) return;
+    lifecycleListenersAttached = true;
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            handleAppResumeOrUnlock();
+        }
+    });
+
+    window.addEventListener('pageshow', () => {
+        handleAppResumeOrUnlock();
+    });
+
+    window.addEventListener('focus', () => {
+        handleAppResumeOrUnlock();
+    });
+
+    window.addEventListener('online', () => {
+        handleAppResumeOrUnlock();
+    });
 }
